@@ -2,13 +2,13 @@
 // Orden del archivo: utilidades → estado → carga de datos → red y perfiles → mapa → interacción
 //                    → fichas → lista de sitios → búsqueda → guardados/exportación → fuentes → inicio.
 import * as maplibregl from './vendor/maplibre-gl.mjs';
-import {POWER_BANDS, CONSTRAINTS, bandOf, constraintsOf, powerImage, powerColor, registerMapSymbols, symbolSVG} from './map-symbols.mjs?v=2.0.5';
-import {EMPTY, fc, bboxOf, distance, hydraulicPowerKW, normalize, cellKeyFromInt, pointFeature, lineFeature} from './geo.mjs?v=2.0.5';
+import {POWER_BANDS, CONSTRAINTS, bandOf, constraintsOf, powerImage, powerColor, registerMapSymbols, symbolSVG} from './map-symbols.mjs?v=2.0.6';
+import {EMPTY, fc, bboxOf, distance, hydraulicPowerKW, normalize, cellKeyFromInt, pointFeature, lineFeature} from './geo.mjs?v=2.0.6';
 
 /* ───────────── Utilidades ───────────── */
 const V = 'data/v2/';
 // Cambiar al regenerar los datos (scripts/pipeline/06): obliga a los navegadores a descargar la versión nueva.
-const DATA_VERSION = '2026-11-10.3';
+const DATA_VERSION = '2026-11-10.4';
 const versioned = url => url + (url.includes('?') ? '&' : '?') + 'd=' + DATA_VERSION;
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const isNum = n => n !== null && n !== undefined && n !== '' && Number.isFinite(Number(n));
@@ -153,7 +153,11 @@ async function attachBasemap(target, before) {
   } catch (e) { console.warn('Cartografía de contexto:', e.message); }
 }
 
-const RIVER_TIERS = ['major', 'mid', 'minor'];
+// Ríos principales, medianos y pequeños; los pequeños vienen en MINOR_PARTS piezas regionales
+// (debe coincidir con MINOR_PARTS en scripts/pipeline/06_web_data.py).
+const MINOR_PARTS = 8;
+const MINOR_TIERS = Array.from({length: MINOR_PARTS}, (_, i) => `minor-${i + 1}`);
+const RIVER_TIERS = ['major', 'mid', ...MINOR_TIERS];
 // MapLibre admite una sola interpolación por zoom en cada expresión: el resaltado del río
 // seleccionado (feature-state) se suma dentro de cada escalón.
 const selectedExtra = ['case', ['boolean', ['feature-state', 'selected'], false], 2.5, 0];
@@ -602,7 +606,7 @@ async function updateMiniMap() {
     if (mini !== m) return;
     m.addSource('sat', {type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 18});
     m.addLayer({id: 'sat', type: 'raster', source: 'sat', paint: {'raster-opacity': .9}});
-    for (const t of ['mid', 'minor']) {
+    for (const t of ['mid', ...MINOR_TIERS]) {
       m.addSource('r-' + t, {type: 'vector', url: 'pmtiles://' + abs(versioned(V + `tiles/rivers-${t}.pmtiles`))});
       m.addLayer({id: 'r-' + t, type: 'line', source: 'r-' + t, 'source-layer': 'rivers', paint: {'line-color': '#9fd3e0', 'line-width': 1.2, 'line-opacity': .9}});
     }

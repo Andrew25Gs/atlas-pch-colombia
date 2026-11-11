@@ -21,5 +21,5 @@
     if (!document.body.dataset.atlasReady) fail('El atlas está tardando en iniciar. Comprueba la conexión y vuelve a intentar.');
   }, 20000);
   window.addEventListener('atlas-ready', () => clearTimeout(timer), {once: true});
-  import('./app.mjs?v=2.0.5').catch(e => { clearTimeout(timer); console.error(e); fail('No se pudo iniciar el mapa: ' + e.message); });
+  import('./app.mjs?v=2.0.6').catch(e => { clearTimeout(timer); console.error(e); fail('No se pudo iniciar el mapa: ' + e.message); });
 })();
