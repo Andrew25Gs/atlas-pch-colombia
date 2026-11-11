@@ -1,0 +1,31 @@
+{
+ "generated": "2026-11-10",
+ "issues": [],
+ "result": "passed",
+ "sites": 34346,
+ "web_files": 256,
+ "web_bytes_mb": 135.4,
+ "largest_web_files_mb": {
+  "tiles/rivers-minor.pmtiles": 57.2,
+  "tiles/rivers-mid.pmtiles": 9.2,
+  "tiles/constraints.pmtiles": 6.9,
+  "tiles/rivers-major.pmtiles": 3.8,
+  "sites.geojson.gz": 2.7,
+  "rivers-search.json.gz": 0.7,
+  "reaches/-76_4.json.gz": 0.7,
+  "reaches/-74_5.json.gz": 0.7
+ },
+ "existing_plants": {
+  "plants_checked": 70,
+  "small_plants_le_20mw": 35,
+  "small_with_scheme_within_3km_pct": 100.0,
+  "small_ratio_estimated_over_installed_median": 1.6,
+  "small_ratio_p25_p75": [
+   0.53,
+   3.2
+  ],
+  "large_plants_gt_20mw": 35,
+  "large_with_scheme_within_3km_pct": 94.3,
+  "note": "Las centrales grandes suelen usar embalse y túneles largos: no son comparables con el esquema de derivación ≤3 km evaluado."
+ }
+}

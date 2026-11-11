@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="es">
+<head>
+ <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+ <meta name="theme-color" content="#113c3a">
+ <meta name="description" content="Atlas de exploración de pequeñas centrales hidroeléctricas (PCH) en Colombia: red hidrográfica, caudal regionalizado ENA 2022, salto FABDEM, sitios candidatos y restricciones del corredor.">
+ <meta name="robots" content="noindex, nofollow">
+ <title>Atlas PCH · Colombia</title>
+ <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+ <link rel="stylesheet" href="vendor/maplibre-gl.css"><link rel="stylesheet" href="app.css?v=2.0.5">
+</head>
+<body>
+ <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.7" cy="10.7" r="6.6"/><path d="m16 16 4.5 4.5"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m3 8 9-5 9 5-9 5-9-5Zm0 5 9 5 9-5M3 18l9 5 9-5"/></symbol>
+  <symbol id="i-water" viewBox="0 0 24 24"><path d="M3 6c4-5 6 5 10 0s6 5 9 0M3 12c4-5 6 5 10 0s6 5 9 0M3 18c4-5 6 5 10 0s6 5 9 0"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.2"/></symbol>
+  <symbol id="i-mountain" viewBox="0 0 24 24"><path d="m2 20 8-15 5 8 3-5 5 12H2Zm5-9 3 3 3-4"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 5v16M3 3c4 0 6 1 9 3 3-2 5-3 9-3v15c-4 0-6 1-9 3-3-2-5-3-9-3V3Z"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 5h18M6 12h12M9 19h6"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="m4 10 8-7 8 7v11H4V10Zm5 11v-8h6v8"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m14 2-9 12h6l-1 8 9-12h-6l1-8Z"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M6 3h12v19l-6-4-6 4V3Z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z"/></symbol>
+  <symbol id="i-people" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6M16 11a3 3 0 1 0 0-6M17 14c2.5.4 4 2.7 4 6"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3Zm0 7v5m0 3v.5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M5 21 9 3h6l4 18M7 12h10M3 7h18"/></symbol>
+ </defs></svg>
+ <header class="topbar">
+  <a class="brand" href="#" aria-label="Atlas PCH Colombia, inicio"><img src="assets/mark.svg" alt="" width="35" height="35"><span>ATLAS <b>PCH</b><small>COLOMBIA</small></span></a>
+  <nav class="main-nav" aria-label="Secciones">
+   <button class="nav-button active" data-view="explore">Explorar territorio</button>
+   <button class="nav-button" data-view="sites">Sitios candidatos</button>
+   <button class="nav-button" data-view="saved">Guardados <span id="saved-count">0</span></button>
+  </nav>
+  <div class="header-end"><span class="national-label"><span></span> Versión de revisión · datos 2026</span><button class="icon-button" id="sources-open" aria-label="Fuentes y metodología"><svg><use href="#i-book"/></svg></button></div>
+ </header>
+ <div class="workspace">
+  <aside class="sidebar" id="sidebar">
+   <div class="sidebar-intro"><button class="icon-button sidebar-mobile-close" id="sidebar-close" aria-label="Cerrar capas y filtros"><svg><use href="#i-close"/></svg></button><div class="eyebrow">EXPLORACIÓN HIDROENERGÉTICA</div><h1>El potencial<br>de nuestro territorio.</h1><p>Caudal, salto y restricciones<br>de cada río de Colombia.</p></div>
+   <div class="search-wrap"><svg><use href="#i-search"/></svg><input id="search" type="search" autocomplete="off" aria-label="Buscar río, municipio o central" placeholder="Río, municipio o central…"><kbd>/</kbd><div id="search-results" class="search-results" hidden></div></div>
+   <div class="sidebar-scroll">
+    <section class="layer-section"><div class="section-title"><h2><svg><use href="#i-layers"/></svg> Capas del mapa</h2><button id="layers-reset" class="text-button">Restablecer</button></div>
+     <div class="layer-row"><span class="layer-icon water"><svg><use href="#i-water"/></svg></span><label for="layer-rivers"><b>Red de ríos unificada</b><small id="river-layer-count">605.905 tramos · HydroSHEDS v2</small></label><input id="layer-rivers" class="switch" type="checkbox" checked></div>
+     <div class="segmented" role="radiogroup" aria-label="Colorear ríos por">
+      <button data-color="plain" class="active" aria-pressed="true">Cauce</button><button data-color="flow" aria-pressed="false">Caudal</button><button data-color="potential" aria-pressed="false">Potencial</button>
+     </div>
+     <div class="layer-row"><span class="layer-icon terrain"><svg><use href="#i-mountain"/></svg></span><label for="layer-relief"><b>Elevación y relieve</b><small>Sombreado · vista 3D</small></label><input id="layer-relief" class="switch" type="checkbox"></div>
+     <div class="layer-row"><span class="layer-icon satellite"><svg><use href="#i-layers"/></svg></span><label for="layer-satellite"><b>Imagen satelital</b><small>Contexto visual del territorio</small></label><input id="layer-satellite" class="switch" type="checkbox"></div>
+     <h3 class="layer-group">Restricciones</h3>
+     <div class="layer-row"><span class="layer-icon environment"><svg><use href="#i-shield"/></svg></span><label for="layer-environment"><b>Áreas ambientales</b><small>Parques, DMI, RUNAP, páramos, Ley 2ª, embalses</small></label><input id="layer-environment" class="switch" type="checkbox" checked></div>
+     <div class="layer-row"><span class="layer-icon ethnic"><svg><use href="#i-people"/></svg></span><label for="layer-ethnic"><b>Territorios étnicos y campesinos</b><small>Resguardos, consejos comunitarios, ZRC</small></label><input id="layer-ethnic" class="switch" type="checkbox"></div>
+     <div class="layer-row"><span class="layer-icon hazard"><svg><use href="#i-alert"/></svg></span><label for="layer-hazard"><b>Amenaza por movimientos en masa</b><small>SGC · servicio en vivo</small></label><input id="layer-hazard" class="switch" type="checkbox"></div>
+     <h3 class="layer-group">Infraestructura</h3>
+     <div class="layer-row"><span class="layer-icon plant" data-map-symbol="plant"></span><label for="layer-plants"><b>Centrales hidroeléctricas</b><small>Inventario XM / UPME</small></label><input id="layer-plants" class="switch" type="checkbox" checked></div>
+     <div class="layer-row"><span class="layer-icon project" data-map-symbol="project"></span><label for="layer-projects"><b>Proyectos hidráulicos con capacidad asignada</b><small>UPME · conexión aprobada</small></label><input id="layer-projects" class="switch" type="checkbox"></div>
+     <div class="layer-row compact"><span class="layer-icon grid"><svg><use href="#i-grid"/></svg></span><label for="layer-grid">Líneas de transmisión</label><input id="layer-grid" class="switch" type="checkbox"></div>
+     <div class="layer-row compact"><span class="layer-icon substation" data-map-symbol="substation"></span><label for="layer-substations">Subestaciones eléctricas</label><input id="layer-substations" class="switch" type="checkbox"></div>
+     <div class="layer-row compact"><span class="layer-icon station" data-map-symbol="station-active"></span><label for="layer-stations">Estaciones hidrológicas IDEAM</label><input id="layer-stations" class="switch" type="checkbox"></div>
+     <div class="layer-row compact"><span class="layer-icon upme"><svg><use href="#i-bolt"/></svg></span><label for="layer-upme2015">Referencias Atlas UPME 2015</label><input id="layer-upme2015" class="switch" type="checkbox"></div>
+    </section>
+    <section class="potential-section"><div class="section-title"><h2><svg><use href="#i-filter"/></svg> Sitios candidatos</h2><input id="layer-sites" class="switch" aria-label="Mostrar sitios candidatos" type="checkbox" checked></div>
+     <p class="section-note" id="sites-note">Cálculo nacional: caudal ENA 2022 × salto FABDEM, sin solapes.</p>
+     <div class="power-filters" id="power-filters" aria-label="Filtrar por potencia"><button data-power="all" class="power-chip active" aria-pressed="true">Todos</button></div>
+     <label class="select-label" for="constraint-filter">Restricciones en el corredor</label>
+     <select id="constraint-filter">
+      <option value="no-spnn">Excluir Parques Nacionales y embalses existentes</option>
+      <option value="all">Mostrar todos</option>
+      <option value="no-ethnic">Excluir además territorios étnicos</option>
+      <option value="clean">Solo sin coincidencias</option>
+     </select>
+     <label class="select-label" for="area-filter">Área hidrográfica</label><select id="area-filter"><option value="">Todas las áreas</option><option>Magdalena-Cauca</option><option>Caribe</option><option>Pacífico</option><option>Orinoco</option><option>Amazonas</option></select>
+     <div class="list-header"><b id="results-title">Sitios por potencia</b><span id="result-count">—</span></div>
+     <label class="viewport-label"><input id="viewport-only" type="checkbox">Solo en el área visible</label>
+     <div id="site-list" class="opportunity-list"><div class="loading-text">Cargando sitios candidatos…</div></div>
+    </section>
+   </div>
+   <footer class="sidebar-footer"><span class="live-dot"></span><span id="data-status">Preparando datos</span><button class="text-button" id="method-open">Ver fuentes <svg><use href="#i-arrow"/></svg></button></footer>
+  </aside>
+  <main id="map-shell" class="map-shell">
+   <div id="map" role="region" aria-label="Mapa interactivo de Colombia"></div>
+   <div class="map-topline"><div class="map-breadcrumb"><span>COLOMBIA</span><span class="breadcrumb-sep">/</span><b id="map-region">Vista nacional</b></div><div class="map-view-buttons"><button id="view-2d" class="active" aria-pressed="true">2D</button><button id="view-3d" aria-pressed="false">3D</button></div></div>
+   <div class="map-actions"><button id="national-view" class="map-action" aria-label="Ver toda Colombia" data-tooltip="Vista nacional"><svg><use href="#i-home"/></svg></button><button id="zoom-in" class="map-action" aria-label="Acercar">+</button><button id="zoom-out" class="map-action" aria-label="Alejar">−</button></div>
+   <div id="map-hint" class="map-hint"><span class="hint-icon"><svg><use href="#i-pin"/></svg></span><div><b>Selecciona un sitio (rayo) o cualquier río</b><span>La ficha muestra caudal, salto, perfil, restricciones y escenario.</span></div><button class="icon-button" id="hint-close" aria-label="Cerrar consejo"><svg><use href="#i-close"/></svg></button></div>
+   <div class="map-bottom"><details class="map-key"><summary><svg aria-hidden="true"><use href="#i-layers"/></svg>Simbología</summary><div class="map-key-body" id="map-key-body"></div></details><div class="map-coordinate" id="coordinates">4,5709° N · 74,2973° O</div></div>
+   <button id="mobile-sidebar" class="mobile-sidebar"><svg><use href="#i-layers"/></svg> Capas y filtros</button>
+   <div id="map-loading" class="map-loading"><span class="spinner"></span><b>Preparando el atlas nacional</b><span>Red hidrográfica y sitios candidatos</span></div>
+   <div id="map-error" class="map-error" hidden></div>
+  </main>
+  <aside id="detail-panel" class="detail-panel" hidden aria-label="Ficha del lugar seleccionado">
+   <div class="detail-heading"><span class="eyebrow" id="detail-eyebrow">FICHA DEL TERRITORIO</span><button id="detail-close" class="icon-button" aria-label="Cerrar ficha"><svg><use href="#i-close"/></svg></button></div>
+   <div id="detail-title"></div>
+   <div class="detail-tabs" role="tablist" aria-label="Información del lugar"><button role="tab" aria-selected="true" data-tab="summary">Resumen</button><button role="tab" aria-selected="false" data-tab="hydrology">Hidrología</button><button role="tab" aria-selected="false" data-tab="context">Entorno</button></div>
+   <div class="detail-scroll"><div id="mini-map" aria-label="Mapa de detalle del lugar"></div><div id="detail-content"></div></div>
+   <div class="detail-footer"><button class="secondary-button" id="save-site"><svg><use href="#i-save"/></svg> Guardar lugar</button><button class="icon-button" id="export-site" aria-label="Descargar ficha GeoJSON"><svg><use href="#i-download"/></svg></button></div>
+  </aside>
+ </div>
+ <dialog id="sources-dialog"><div class="dialog-header"><div><span class="eyebrow">TRANSPARENCIA DE LOS DATOS</span><h2>Fuentes y metodología</h2></div><button class="icon-button" id="sources-close" aria-label="Cerrar fuentes"><svg><use href="#i-close"/></svg></button></div><div id="sources-content" class="sources-content"></div></dialog>
+ <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+ <noscript>Este atlas necesita JavaScript para mostrar el mapa interactivo.</noscript>
+ <script defer src="vendor/pmtiles.js?v=4.5.0"></script>
+ <script defer src="boot.js?v=2.0.5"></script>
+</body></html>

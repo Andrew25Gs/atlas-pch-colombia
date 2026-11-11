@@ -1,0 +1,156 @@
+{
+ "version": 2,
+ "generated": "2026-11-10",
+ "reach_fields": [
+  "down_id",
+  "down_cell",
+  "upstream_km2",
+  "length_km",
+  "strahler",
+  "szh",
+  "name",
+  "q_medio",
+  "q_seco",
+  "q_humedo",
+  "q_disp",
+  "q_disp_seco",
+  "q95_label",
+  "q_hydrorivers",
+  "corridor_mask",
+  "external_basin",
+  "best[offset,steps,head_m,conduit_km,river_km,p_kw]",
+  "dx_1e5",
+  "dy_1e5",
+  "dz_m"
+ ],
+ "power_classes": [
+  {
+   "id": 1,
+   "min_kw": 0,
+   "max_kw": 50,
+   "label": "Menos de 50 kW"
+  },
+  {
+   "id": 2,
+   "min_kw": 50,
+   "max_kw": 500,
+   "label": "50 a 500 kW"
+  },
+  {
+   "id": 3,
+   "min_kw": 500,
+   "max_kw": 5000,
+   "label": "0,5 a 5 MW"
+  },
+  {
+   "id": 4,
+   "min_kw": 5000,
+   "max_kw": 10000,
+   "label": "5 a 10 MW"
+  },
+  {
+   "id": 5,
+   "min_kw": 10000,
+   "max_kw": 20000,
+   "label": "10 a 20 MW"
+  },
+  {
+   "id": 6,
+   "min_kw": 20000,
+   "max_kw": null,
+   "label": "Más de 20 MW (fuera de rango PCH)"
+  }
+ ],
+ "constraint_bits": {
+  "spnn": 1,
+  "dmi": 2,
+  "protected": 4,
+  "paramo": 8,
+  "ley2": 16,
+  "resguardo": 32,
+  "consejo": 64,
+  "zrc": 128,
+  "embalse": 256
+ },
+ "counts": {
+  "reaches": 605905,
+  "cells": 130,
+  "sites": 34346
+ },
+ "reports": {
+  "hydrology": {
+   "generated": "2026-11-10",
+   "reaches": 605905,
+   "reaches_outside_szh_polygons": 1204,
+   "reaches_external_basin_flag": 57,
+   "q95_transferred": 84795,
+   "q95_rejected_geometry": 22944,
+   "q95_rejected_incoherent": 11590,
+   "contrast_hydrorivers": {
+    "pairs": 149201,
+    "ratio_ena_hydrorivers_median": 0.9889397419944612,
+    "ratio_p10": 0.6465541343715331,
+    "ratio_p90": 1.4667374019219266,
+    "within_factor_2_pct": 92.6059476813158
+   }
+  },
+  "profile": {
+   "generated": "2026-11-10",
+   "dem": "FABDEM V1-2 (min 3x3)",
+   "step_km": 0.1,
+   "stations": 10416146,
+   "stations_without_dem": 0,
+   "missing_tiles": [],
+   "abs_deviation_conditioned_vs_raw_m": {
+    "median": 0.0,
+    "p90": 0.27001953125,
+    "p99": 2.4850006103515625
+   }
+  },
+  "sites": {
+   "generated": "2026-11-10",
+   "parameters": {
+    "max_river_km": 8.0,
+    "max_conduit_km": 3.0,
+    "min_head_m": 10.0,
+    "min_gradient_m_per_km": 20.0,
+    "efficiency": 0.85,
+    "head_loss": 0.05,
+    "min_site_kw": 20.0,
+    "design_flow": "ENA 2022 oferta disponible año medio"
+   },
+   "stations": 10416146,
+   "stations_with_option": 2432375,
+   "reaches_with_option": 174028,
+   "sites": 34346,
+   "sites_by_class": {
+    "Menos de 50 kW": 4998,
+    "50 a 500 kW": 16428,
+    "0,5 a 5 MW": 10965,
+    "5 a 10 MW": 1043,
+    "10 a 20 MW": 519,
+    "Más de 20 MW (fuera de rango PCH)": 393
+   },
+   "total_site_power_mw": 51707.2
+  },
+  "context": {
+   "generated": "2026-11-10",
+   "corridor_buffer_m": 100,
+   "sites": 34346,
+   "sites_without_constraint_hits": 12556,
+   "sites_by_constraint": {
+    "spnn": 4317,
+    "dmi": 2284,
+    "protected": 2123,
+    "paramo": 2247,
+    "ley2": 13167,
+    "resguardo": 6240,
+    "consejo": 3713,
+    "zrc": 837,
+    "embalse": 338
+   },
+   "sites_near_existing_plant": 177,
+   "sites_near_assigned_project": 74
+  }
+ }
+}
