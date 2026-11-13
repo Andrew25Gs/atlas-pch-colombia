@@ -2,13 +2,14 @@
 // Orden del archivo: utilidades → estado → carga de datos → red y perfiles → mapa → interacción
 //                    → fichas → lista de sitios → búsqueda → guardados/exportación → fuentes → inicio.
 import * as maplibregl from './vendor/maplibre-gl.mjs';
-import {POWER_BANDS, CONSTRAINTS, bandOf, constraintsOf, powerImage, powerColor, registerMapSymbols, symbolSVG} from './map-symbols.mjs?v=2.0.6';
-import {EMPTY, fc, bboxOf, distance, hydraulicPowerKW, normalize, cellKeyFromInt, pointFeature, lineFeature} from './geo.mjs?v=2.0.6';
+import {POWER_BANDS, CONSTRAINTS, bandOf, constraintsOf, powerImage, powerColor, registerMapSymbols, symbolSVG, protectedCategoryNote} from './map-symbols.mjs?v=2.1.0';
+import {fdcSigma, fdcQ, fdcTurbined, predesign, economics, ECON_DEFAULTS} from './engineering.mjs?v=2.1.0';
+import {EMPTY, fc, bboxOf, distance, hydraulicPowerKW, normalize, cellKeyFromInt, pointFeature, lineFeature} from './geo.mjs?v=2.1.0';
 
 /* ───────────── Utilidades ───────────── */
 const V = 'data/v2/';
 // Cambiar al regenerar los datos (scripts/pipeline/06): obliga a los navegadores a descargar la versión nueva.
-const DATA_VERSION = '2026-11-10.4';
+const DATA_VERSION = '2026-11-12.1';
 const versioned = url => url + (url.includes('?') ? '&' : '?') + 'd=' + DATA_VERSION;
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const isNum = n => n !== null && n !== undefined && n !== '' && Number.isFinite(Number(n));
@@ -41,7 +42,10 @@ async function json(url, timeoutMs = 30000) {
 // Supuestos editables. Coinciden con los del cálculo nacional (scripts/pipeline/04_sites.py).
 const DEFAULTS = {eta: 85, loss: 5, plantFactor: 50, maxConduit: 3, minHead: 10, minGradient: 20, maxRiver: 8};
 const S = {
-  view: 'explore', power: 'all', area: '', constraint: 'no-spnn', colorBy: 'plain', listLimit: 20,
+  // Filtros por defecto (revisión del panel): solo PCH ≤ 20 MW, sin Parques Nacionales ni embalses, sin caudal regulado.
+  view: 'explore', power: 'pch', area: '', dept: '', maxGrid: '', hideRegulated: true, hideQuality: false,
+  constraint: 'no-spnn', colorBy: 'plain', listLimit: 20,
+  scenario: {amb: 'ena'}, econ: {...ECON_DEFAULTS},
   data: {}, sites: [], siteById: new Map(), cells: new Map(), reaches: new Map(), siteCtx: new Map(),
   subzonas: null, manifest: null, riverSearch: null,
   selection: null, tab: 'summary', saved: [], mapReady: false, params: {...DEFAULTS},
@@ -75,7 +79,7 @@ async function getReach(id, cellKey) {
   const reach = {
     id: key, cellKey, down: r[0] ? String(r[0]) : null, downCell: r[1], upa: r[2], length: r[3], strahler: r[4], szh: r[5], name: r[6],
     q: {medio: r[7], seco: r[8], humedo: r[9], disp: r[10], dispSeco: r[11]}, q95: r[12], qHydroRivers: r[13],
-    mask: r[14], external: r[15], best: r[16],
+    mask: r[14], external: r[15], best: r[16], regFrac: r[20] || 0, regName: r[21] || null,
     stations: xs.map((x, i) => ({x, y: ys[i], z: zs[i] < -9000 ? null : zs[i]})),
   };
   S.reaches.set(key, reach);
@@ -168,12 +172,13 @@ const riverWidth = ['interpolate', ['linear'], ['zoom'],
 function riverColor() {
   const base = S.colorBy === 'flow'
     ? ['interpolate', ['linear'], ['coalesce', ['get', 'q'], 0], 0, '#c3d9de', .1, '#8cb8d0', 1, '#5a9bb9', 10, '#3a7f9f', 100, '#335e91', 1000, '#274775']
-    : S.colorBy === 'potential' ? powerColor : '#489ba4';
+    : S.colorBy === 'potential' ? powerColor : '#2f7f8a';
   return ['case', ['boolean', ['feature-state', 'selected'], false], '#123f37', base];
 }
 const POINT_LAYERS = {
   'site-point': {source: 'sites', kind: 'site'},
   'site-point-small': {source: 'sites', kind: 'site'},
+  'site-point-mid': {source: 'sites', kind: 'site'},
   'upme-point': {source: 'upme2015', kind: 'upme2015'},
   'station-point': {source: 'stations', kind: 'station'},
   'substation-point': {source: 'substations', kind: 'substation'},
@@ -195,7 +200,9 @@ function setupMap() {
   map.addLayer({id: 'satellite-layer', type: 'raster', source: 'satellite', layout: {visibility: 'none'}}, firstSymbol);
   map.addSource('hazard', {type: 'raster', tiles: ['https://srvags.sgc.gov.co/arcgis/rest/services/SIMMA/ZonificacionAmenazaCache/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, maxzoom: 15,
     attribution: 'Amenaza por movimientos en masa: <a href="https://www2.sgc.gov.co/sgc/mapas/" target="_blank">Servicio Geológico Colombiano</a>'});
-  map.addLayer({id: 'hazard-layer', type: 'raster', source: 'hazard', layout: {visibility: 'none'}, paint: {'raster-opacity': .55}}, firstSymbol);
+  // Desaturada para que sus amarillos y rojos no compitan con los rayos de potencia (revisión de diseño)
+  map.addLayer({id: 'hazard-layer', type: 'raster', source: 'hazard', layout: {visibility: 'none'},
+    paint: {'raster-opacity': .4, 'raster-saturation': -0.5, 'raster-contrast': -0.1}}, firstSymbol);
 
   for (const k of ['boundary', 'departments', 'grid', 'route', 'conduit', 'endpoints', 'selected-point', 'sites', 'upme2015', 'stations', 'substations', 'projects', 'plants', 'municipal-plants'])
     map.addSource(k, {type: 'geojson', data: EMPTY});
@@ -223,8 +230,9 @@ function setupMap() {
 
   map.addLayer({id: 'grid-line', type: 'line', source: 'grid', layout: {visibility: 'none'},
     paint: {'line-color': '#6d438a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, .8, 12, 2], 'line-dasharray': [4, 2], 'line-opacity': .8}});
-  map.addLayer({id: 'route-line', type: 'line', source: 'route', layout: {'line-cap': 'round', 'line-join': 'round'}, paint: {'line-color': '#ce8b3d', 'line-width': 5, 'line-opacity': .95}});
-  map.addLayer({id: 'conduit-line', type: 'line', source: 'conduit', paint: {'line-color': '#1d3f39', 'line-width': 2.5, 'line-dasharray': [2, 1.2]}});
+  map.addLayer({id: 'route-casing', type: 'line', source: 'route', layout: {'line-cap': 'round', 'line-join': 'round'}, paint: {'line-color': '#5a3a0a', 'line-width': 7, 'line-opacity': .9}});
+  map.addLayer({id: 'route-line', type: 'line', source: 'route', layout: {'line-cap': 'round', 'line-join': 'round'}, paint: {'line-color': '#e08a1e', 'line-width': 4}});
+  map.addLayer({id: 'conduit-line', type: 'line', source: 'conduit', paint: {'line-color': '#1f2a2a', 'line-width': 2.5, 'line-dasharray': [2, 1.2]}});
 
   registerMapSymbols(map);
   const size = ['interpolate', ['linear'], ['zoom'], 4, .55, 8, .8, 12, 1.05];
@@ -235,14 +243,24 @@ function setupMap() {
   map.addLayer({id: 'project-point', type: 'symbol', source: 'projects', layout: {'icon-image': 'atlas-project', 'icon-size': size, 'icon-allow-overlap': true, visibility: 'none'}});
   map.addLayer({id: 'plant-municipal', type: 'symbol', source: 'municipal-plants', minzoom: 6, layout: {'icon-image': 'atlas-municipal', 'icon-size': size}});
   map.addLayer({id: 'plant-point', type: 'symbol', source: 'plants', layout: {'icon-image': 'atlas-plant', 'icon-size': size, 'icon-allow-overlap': true}});
-  // Sitios: los de ≥ 1 MW siempre; los menores al acercarse (evita saturar la vista nacional).
+  // Sitios escalonados por zoom (revisión de diseño): ≥ 5 MW siempre; 0,5–5 MW desde z6,5; < 0,5 MW desde z9.
+  // La clase > 20 MW (fuera de rango PCH) se dibuja atenuada.
   const siteLayout = {'icon-image': powerImage,
-    'icon-size': ['interpolate', ['linear'], ['zoom'], 4, ['+', .42, ['*', ['get', 'c'], .05]], 9, ['+', .7, ['*', ['get', 'c'], .06]], 13, 1.15],
-    'symbol-sort-key': ['*', -1, ['get', 'p']], 'icon-padding': 1};
-  map.addLayer({id: 'site-point-small', type: 'symbol', source: 'sites', minzoom: 7.5, filter: ['<', ['get', 'p'], 1000], layout: siteLayout});
-  map.addLayer({id: 'site-point', type: 'symbol', source: 'sites', filter: ['>=', ['get', 'p'], 1000], layout: siteLayout});
-  map.addLayer({id: 'endpoint-ring', type: 'circle', source: 'endpoints',
-    paint: {'circle-radius': 7, 'circle-color': ['case', ['==', ['get', 'role'], 'intake'], '#255f51', '#c18136'], 'circle-stroke-color': '#fff', 'circle-stroke-width': 2}});
+    'icon-size': ['interpolate', ['linear'], ['zoom'], 4, ['+', .42, ['*', ['min', ['get', 'c'], 5], .05]], 9, ['+', .7, ['*', ['min', ['get', 'c'], 5], .06]], 13, 1.15],
+    'symbol-sort-key': ['*', -1, ['get', 'p']], 'icon-padding': 2};
+  const sitePaint = {'icon-opacity': ['case', ['==', ['get', 'c'], 6], 0.55, 1]};
+  map.addLayer({id: 'site-point-small', type: 'symbol', source: 'sites', minzoom: 9, filter: ['<', ['get', 'p'], 500], layout: siteLayout, paint: sitePaint});
+  map.addLayer({id: 'site-point-mid', type: 'symbol', source: 'sites', minzoom: 6.5, filter: ['all', ['>=', ['get', 'p'], 500], ['<', ['get', 'p'], 5000]], layout: siteLayout, paint: sitePaint});
+  map.addLayer({id: 'site-point', type: 'symbol', source: 'sites', filter: ['>=', ['get', 'p'], 5000], layout: siteLayout, paint: sitePaint});
+  // Esquema seleccionado inequívoco: bocatoma (círculo verde) y casa de máquinas (cuadrado vino), con etiquetas.
+  map.addLayer({id: 'endpoint-ring', type: 'circle', source: 'endpoints', filter: ['==', ['get', 'role'], 'intake'],
+    paint: {'circle-radius': 7, 'circle-color': '#0f5e4f', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2}});
+  map.addLayer({id: 'endpoint-house', type: 'circle', source: 'endpoints', filter: ['==', ['get', 'role'], 'powerhouse'],
+    paint: {'circle-radius': 7, 'circle-color': '#7a2e0e', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2}});
+  map.addLayer({id: 'endpoint-label', type: 'symbol', source: 'endpoints', layout: {
+    'text-field': ['case', ['==', ['get', 'role'], 'intake'], 'Bocatoma', 'Casa de máquinas'], 'text-font': ['Noto Sans Regular'],
+    'text-size': 12, 'text-offset': [0, 1.3], 'text-anchor': 'top', 'text-allow-overlap': true},
+    paint: {'text-color': '#1f2a2a', 'text-halo-color': '#fff', 'text-halo-width': 1.6}});
   map.addLayer({id: 'selection-point', type: 'circle', source: 'selected-point',
     paint: {'circle-radius': 12, 'circle-color': '#fff', 'circle-opacity': .1, 'circle-stroke-color': '#245e4b', 'circle-stroke-width': 2}});
 
@@ -271,7 +289,7 @@ function updateLayers() {
   visibility('plant-point', on('plants')); visibility('plant-municipal', on('plants'));
   visibility('project-point', on('projects')); visibility('grid-line', on('grid'));
   visibility('station-point', on('stations')); visibility('substation-point', on('substations'));
-  visibility('upme-point', on('upme2015')); visibility('site-point', on('sites')); visibility('site-point-small', on('sites'));
+  visibility('upme-point', on('upme2015')); visibility('site-point', on('sites')); visibility('site-point-mid', on('sites')); visibility('site-point-small', on('sites'));
   for (const [key, file, source] of [['stations', 'data/stations.geojson', 'stations'], ['substations', 'data/energy-substations.geojson', 'substations'],
     ['grid', V + 'grid-lines.geojson.gz', 'grid'], ['projects', V + 'assigned-projects.geojson.gz', 'projects'], ['upme2015', 'data/opportunities.geojson', 'upme2015']])
     if (on(key) || (key === 'substations' && S.selection)) void ensureLayerData(key, file, source);
@@ -373,6 +391,8 @@ function selectFeature(kind, f) {
 
 function setSelection(sel) {
   popup?.remove(); clearSelectionLayers();
+  if (S.selection?.reach?.id !== sel.reach?.id || !sel.reach) S.scenario = {amb: 'ena'}; // supuestos propios por lugar
+  if (sel.originalOption === undefined) sel.originalOption = sel.option;                // para "Volver al esquema original"
   S.selection = sel; S.tab = 'summary'; S.hazard = null;
   if (sel.reach) highlightReach(sel.reach.id);
   if (sel.option) drawOption(sel.option); else setData('selected-point', fc([pointFeature(sel.coord)]));
@@ -380,6 +400,7 @@ function setSelection(sel) {
   $('#map-region').textContent = sel.subtitle || 'Selección';
   renderDetail(); renderList(); renderMapKey();
   $('.detail-scroll').scrollTop = 0; // cada ficha nueva empieza arriba
+  $('#detail-title h2')?.focus({preventScroll: true}); // accesibilidad: el foco pasa a la ficha
   requestAnimationFrame(() => {
     map.resize();
     const pad = {top: 80, bottom: 80, left: 50, right: innerWidth > 660 && innerWidth <= 900 ? 390 : 50};
@@ -397,28 +418,112 @@ function closeDetail() {
   map?.resize(); renderList(); renderMapKey();
 }
 
+// Glosario (revisión del usuario final): cada término técnico de la ficha tiene su explicación.
+const GLOSSARY = {
+  'PCH': 'Pequeña central hidroeléctrica. En Colombia se llama así, por convención, a las centrales de hasta 20 MW.',
+  'Salto bruto': 'Diferencia de altura del lecho del río entre la bocatoma y la casa de máquinas, medida en el modelo de elevación (FABDEM). Error típico: unos pocos metros.',
+  'Salto neto': 'Salto bruto menos lo que se pierde por fricción en el canal y en la tubería. Es el que realmente mueve la turbina.',
+  'Conducción': 'Canal, tubería o túnel que lleva el agua desde la bocatoma hasta la casa de máquinas. Aquí se mide en línea recta: el trazado real es más largo.',
+  'Bocatoma': 'Obra que capta parte del agua del río.',
+  'Casa de máquinas': 'Edificio con la turbina y el generador. Después, el agua vuelve al río (restitución).',
+  'Tramo con caudal reducido': 'Parte del río entre la bocatoma y la casa de máquinas, por donde solo pasa el caudal ambiental mientras la central opera.',
+  'Caudal de diseño': 'Caudal máximo que la central puede turbinar. Aquí parte de la oferta disponible de año medio del IDEAM (ENA 2022).',
+  'Caudal ambiental': 'Agua que debe quedar en el río para el ecosistema y otros usos. El exigible lo fija la autoridad ambiental en cada concesión o licencia.',
+  'Factor de planta': 'Energía que produce la central en un año dividida por la que produciría a plena potencia todo el año. Depende de cuánto varía el caudal.',
+  'Curva de duración': 'Gráfico que dice qué porcentaje del tiempo el río lleva al menos cierto caudal. Q95 es el caudal superado el 95 % del tiempo.',
+  'Q95': 'Caudal que el río supera el 95 % del tiempo (caudal de estiaje).',
+  'IRH': 'Índice de regulación hídrica del IDEAM (0 a 1): qué tan estable es el caudal de la subzona. Más alto = caudal más parejo.',
+  'IUA': 'Índice de uso del agua del IDEAM: qué parte de la oferta ya se usa. "Alto" o "Crítico" anticipa competencia por el agua.',
+  'Eficiencia': 'Fracción de la energía del agua que se convierte en electricidad (turbina, generador y transformador).',
+  'Diámetro de la tubería': 'Diámetro de la tubería de presión estimado con la fórmula de Fahlbusch (acero). Orienta costos, no es diseño.',
+  'Velocidad en la tubería': 'Velocidad del agua en la tubería de presión. Lo habitual es de 2 a 5 m/s.',
+  'Tiempo de arranque del agua': 'Indicador del golpe de ariete (Tw). Si supera unos 3 s, suele necesitarse chimenea de equilibrio o válvula de alivio.',
+  'Inversión indicativa': 'Orden de magnitud del costo total: obras, equipos, túnel probable y conexión. Banda de −30 % a +50 %.',
+  'Costo nivelado': 'Costo medio de producir cada kWh durante la vida útil (LCOE), incluyendo inversión, financiación y operación.',
+  'TRM': 'Tasa representativa del mercado: pesos colombianos por dólar.',
+  'Clase regulatoria': 'Cómo trata la regulación a la central según su tamaño: generación distribuida, planta menor, despacho central…',
+  'Consulta previa': 'Derecho de los pueblos indígenas y comunidades negras a ser consultados cuando un proyecto los afecta directamente.',
+  'Sustracción': 'Trámite ante el MinAmbiente para sacar un área de una reserva forestal y poder construir en ella.',
+  'ZNI': 'Zona no interconectada: sin red del sistema nacional; la electricidad suele venir de plantas diésel.',
+  'Cuenca aportante': 'Área de terreno cuya lluvia escurre hasta ese punto del río.',
+  'Orden del cauce (Strahler)': 'Número que crece al unirse ríos: 1 = quebrada de cabecera; 6 o más = río grande.',
+};
+const glossaryKey = label => Object.keys(GLOSSARY).find(k => label.toLowerCase().startsWith(k.toLowerCase()));
+function term(label) {
+  const k = glossaryKey(label);
+  return k ? `<span class="term" tabindex="0" data-term="${esc(k)}" title="${esc(GLOSSARY[k])}">${esc(label)}<i aria-hidden="true">?</i></span>` : esc(label);
+}
+function kv(items) {
+  return `<dl class="detail-kv">${items.filter(Boolean).map(([k, v]) => `<dt>${term(k)}</dt><dd>${esc(v ?? 'Sin dato')}</dd>`).join('')}</dl>`;
+}
+
 /* ───────────── Fichas ───────────── */
 const subzoneName = code => S.subzonas?.[code]?.name ? `${S.subzonas[code].name} (${code})` : code ? `Subzona ${code}` : '';
-function kv(items) { return `<dl class="detail-kv">${items.filter(Boolean).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v ?? 'Sin dato')}</dd>`).join('')}</dl>`; }
+const TABS = {summary: 'Resumen', hydrology: 'Hidrología', context: 'Entorno', business: 'Negocio', steps: 'Próximos pasos'};
 
 function renderDetail() {
   const sel = S.selection; if (!sel) return;
   $('#detail-eyebrow').textContent = {site: 'SITIO CANDIDATO', reach: 'TRAMO DE RÍO', plant: 'CENTRAL EXISTENTE', station: 'ESTACIÓN IDEAM', substation: 'SUBESTACIÓN', project: 'PROYECTO CON CAPACIDAD ASIGNADA', upme2015: 'REFERENCIA UPME 2015'}[sel.kind] || 'FICHA';
-  $('#detail-title').innerHTML = `<h2>${esc(sel.title)}</h2><p>${esc(sel.subtitle || '')}</p>`;
+  $('#detail-title').innerHTML = `<h2 tabindex="-1">${esc(sel.title)}</h2><p>${esc(sel.subtitle || '')}</p>`;
   const tabs = ['site', 'reach'].includes(sel.kind);
   $('.detail-tabs').hidden = !tabs;
-  $$('.detail-tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === S.tab)));
-  $('#detail-content').innerHTML = !tabs ? featureHTML(sel) : S.tab === 'hydrology' ? hydrologyHTML(sel) : S.tab === 'context' ? contextHTML(sel) : summaryHTML(sel);
+  $$('.detail-tabs button').forEach(b => { b.setAttribute('aria-selected', String(b.dataset.tab === S.tab)); b.tabIndex = b.dataset.tab === S.tab ? 0 : -1; });
+  const html = !tabs ? featureHTML(sel) : S.tab === 'hydrology' ? hydrologyHTML(sel) : S.tab === 'context' ? contextHTML(sel)
+    : S.tab === 'business' ? businessHTML(sel) : S.tab === 'steps' ? stepsHTML(sel) : summaryHTML(sel);
+  $('#detail-content').innerHTML = html;
   $('#save-site').innerHTML = icon('save') + (S.saved.some(s => s.id === sel.id) ? 'Quitar de guardados' : 'Guardar lugar');
   if (S.tab === 'context' && tabs && !S.hazard) void loadHazard(sel);
 }
 
+/** Calcula prediseño y energía con los supuestos actuales de la ficha (S.scenario). */
+function computeScenario(sel) {
+  const o = sel.option, r = sel.reach; if (!o) return null;
+  const sc = S.scenario;
+  const qm = r.q.medio, sz = S.subzonas?.[r.szh];
+  const sigma = fdcSigma(sz?.irh);
+  const qDesign = isNum(sc.q) ? sc.q : o.qDesign;
+  const ambient = sc.amb === 'conservador' ? fdcQ(qm, sigma, 0.75) : sc.amb === 'libre' && isNum(sc.ambValue) ? sc.ambValue
+    : Math.max(0, qm - r.q.disp);                                   // ENA: caudal ambiental de planificación implícito
+  const riverKm = o.path.at(-1).d;
+  const pre = predesign({q: qDesign, hg: o.head, conduitKm: o.conduitKm, riverKm});
+  if (!pre) return null;
+  const eta = isNum(sc.eta) ? sc.eta / 100 : pre.eta;
+  const dEff = pre.qPCH;                                           // con tope de 19,9 MW
+  const t = fdcTurbined(qm, sigma, ambient, dEff);
+  const pKW = 9.81 * dEff * pre.hn * eta;
+  const energyMWh = 9.81 * eta * pre.hn * t.qTurb * 8766 / 1000;
+  return {pre, eta, qDesign, dEff, ambient, sigma, qm, plantFactor: t.plantFactor, qTurb: t.qTurb, pKW, energyMWh,
+    q95: fdcQ(qm, sigma, 0.95), q50: fdcQ(qm, sigma, 0.5), q30: fdcQ(qm, sigma, 0.3), irh: sz?.irh, riverKm};
+}
+
+function qualityPills(sel) {
+  const pills = [];
+  const qf = sel.kind === 'site' ? sel.site.qf : 0;
+  const o = sel.option, r = sel.reach, c = sel.context;
+  const pAtlas = o?.pKW || 0;
+  if (pAtlas > 20000) pills.push(['prohibition', 'Supera 20 MW: fuera del rango PCH', 'Un aprovechamiento de este tamaño es una central mediana o grande (licencia ANLA desde 100 MW). En la ficha se dimensiona hasta 19,9 MW.']);
+  if (c?.existing_plants?.length) pills.push(['prohibition', 'Central existente a menos de 2 km', `${c.existing_plants.map(p => `${p.name} (${fmt(p.mw, 1)} MW)`).join(', ')}: es probable que este salto ya esté aprovechado.`]);
+  if (r?.regFrac > 0.1 || qf & 8) pills.push(['prohibition', `Caudal regulado por embalse${r?.regName ? ' (' + r.regName + ')' : ''}`, `El ${fmt((r?.regFrac || sel.site?.reg || 0) * 100)} % de la cuenca está aguas arriba de un embalse: el caudal depende de la operación de esa central y el cálculo regional no aplica.`]);
+  if (qf & 1 || (o && maxStepShare(o) > 0.3)) pills.push(['review', 'Salto concentrado en un solo punto del perfil', 'Más del 30 % del salto está en un paso de ~100 m: puede ser una cascada, una presa, una obra existente o un error del modelo de elevación. Confirmar con topografía.']);
+  if (qf & 2) pills.push(['review', 'Pendiente atípica para un río grande', 'La caída del sitio es 10 o más veces la pendiente regional del río: probable artefacto del modelo de elevación (agua editada o cañón no resuelto).']);
+  if (c?.tunnel_km > 0.2) pills.push(['review', `Conducción probable en túnel (~${fmt(c.tunnel_km, 1)} km)`, `La línea recta cruza terreno hasta ${fmt(c.crest_m)} m por encima de la bocatoma: requiere túnel o un trazado más largo por la ladera.`]);
+  if (c?.zni) pills.push(['review', 'Posible zona no interconectada', 'Sin red del sistema nacional a menos de 50 km: el uso típico es abastecer comunidades (referencia: diésel, ~1.400 COP/kWh).']);
+  return pills.map(([sev, t, d]) => `<div class="detail-pill ${sev}"><b>${esc(t)}</b><br>${esc(d)}</div>`).join('');
+}
+const maxStepShare = o => { const z = o.path.map(s => s.z).filter(isNum); let m = 0; for (let i = 1; i < z.length; i++) m = Math.max(m, z[i - 1] - z[i]); return o.head > 0 ? m / o.head : 0; };
+
 function constraintPills(mask, hits) {
   const list = constraintsOf(mask || 0);
-  if (!list.length) return '<div class="detail-pill neutral">Sin coincidencias del corredor con las capas de restricción incorporadas. No equivale a viabilidad ni autorización.</div>';
+  if (!list.length) return '<div class="detail-pill neutral">Sin coincidencias del corredor con las capas de restricción incorporadas. No equivale a viabilidad ni autorización: faltan, por ejemplo, POMCA, rondas hídricas, zonificaciones de las CAR y zonas de utilidad pública.</div>';
   return list.map(c => {
-    const names = (hits || []).filter(h => h.bit === c.bit).map(h => h.name).filter(Boolean);
-    return `<div class="detail-pill ${c.severity}"><b>${esc(c.label)}</b>${names.length ? ': ' + esc(names.slice(0, 3).join(', ')) + (names.length > 3 ? '…' : '') : ''}<br>${esc(c.note)}</div>`;
+    const own = (hits || []).filter(h => h.bit === c.bit);
+    const names = own.map(h => h.name).filter(Boolean);
+    let sev = c.severity, note = c.note;
+    if (c.key === 'protected') {           // la categoría concreta define el régimen (revisión legal)
+      const special = own.map(h => protectedCategoryNote(h.category)).find(Boolean);
+      if (special) { sev = special.severity; note = special.note; }
+    }
+    return `<div class="detail-pill ${sev}"><b>${esc(c.label)}</b>${names.length ? ': ' + esc(names.slice(0, 3).join(', ')) + (names.length > 3 ? '…' : '') : ''}<br>${esc(note)}</div>`;
   }).join('');
 }
 
@@ -427,104 +532,136 @@ function summaryHTML(sel) {
   let html = '';
   if (o) {
     const band = bandOf(o.pKW || 0);
+    const sc = computeScenario(sel);
     html += `<span class="metric-label">Potencia de referencia${sel.kind === 'site' ? '' : ' del mejor esquema desde este tramo'}</span>
-      <div class="power-readout"><strong>${esc(power(o.pKW).split(' ')[0])}</strong><span>${esc(power(o.pKW).split(' ')[1] || '')}</span></div>
-      <span class="source-badge" style="--badge:${band.color}">${symbolSVG('power-' + band.key)} ${esc(band.label.toUpperCase())}${sel.kind === 'site' ? ` · SITIO N.º ${fmt(sel.site.id)}` : ''}</span>
+      <div class="power-readout ${o.pKW > 20000 ? 'over' : ''}"><strong>${esc(power(o.pKW).split(' ')[0])}</strong><span>${esc(power(o.pKW).split(' ')[1] || '')}</span></div>
+      <span class="source-badge">${symbolSVG('power-' + band.key)} ${esc(band.label.toUpperCase())}${sel.kind === 'site' ? ` · SITIO N.º ${fmt(sel.site.id)}` : ''}</span>
+      ${qualityPills(sel)}
       ${constraintPills(sel.kind === 'site' ? sel.site.m : r.mask, sel.context?.hits)}
       ${kv([
-        ['Salto bruto (DEM)', fmt(o.head, 1) + ' m'],
+        ['Salto bruto', fmt(o.head, 1) + ' m'],
         ['Conducción en línea recta', fmt(o.conduitKm, 2) + ' km'],
         ['Salto por km de conducción', fmt(o.head / Math.max(o.conduitKm, .05), 0) + ' m/km'],
-        ['Tramo de río con caudal reducido', fmt(o.riverKm, 2) + ' km'],
-        ['Caudal de diseño (disponible ENA)', flow(o.qDesign)],
-        sel.kind === 'site' && ['Potencia en año seco', power(o.pDryKW)],
-        sel.kind === 'site' && isNum(o.q95) && ['Potencia con Q95 UPME (mín. de clase)', power(hydraulicPowerKW(o.q95, o.head * .95, .85))],
+        ['Tramo con caudal reducido', fmt(o.path.at(-1).d, 2) + ' km'],
+        ['Caudal de diseño', flow(o.qDesign)],
         ['Elevación bocatoma → casa de máquinas', `${fmt(o.path[0].z)} → ${fmt(o.path.at(-1).z)} m`],
       ])}
       <div class="detail-section-title">Perfil del lecho <span class="mini-tag">FABDEM · CONDICIONADO</span></div>
       ${profileSVG(o)}
       <div class="route-endpoints"><span><i></i>Bocatoma</span><span><i></i>Casa de máquinas</span></div>
-      ${o.head < 20 ? '<div class="detail-pill">Salto pequeño frente a la precisión del modelo de elevación (unos pocos metros). Requiere confirmación topográfica.</div>' : ''}
+      ${o.head < 20 ? '<div class="detail-pill review">Salto pequeño frente a la precisión del modelo de elevación (unos pocos metros). Requiere confirmación topográfica.</div>' : ''}
       <div class="detail-divider"></div>
-      <div class="detail-section-title">Escenario de generación</div>
-      <p class="detail-note">P = 9,81 × Q × H × (1 − pérdidas) × η. Cambia los supuestos para comparar.</p>
+      <div class="detail-section-title">Prediseño y energía <span class="mini-tag">PRELIMINAR</span></div>
+      <p class="detail-note">Esquema canal + tubería de presión, turbina según salto y potencia, y energía con la curva de duración de caudales de la subzona (IRH del IDEAM). Cambia los supuestos para comparar.</p>
       <div class="scenario-form">
-        <label>Caudal (m³/s)<input id="sc-q" type="number" min="0" step="0.01" value="${isNum(o.qDesign) ? +o.qDesign.toFixed(4) : ''}"></label>
-        <label>Eficiencia (%)<input id="sc-eta" type="number" min="1" max="100" step="1" value="${DEFAULTS.eta}"></label>
-        <label>Pérdidas de salto (%)<input id="sc-loss" type="number" min="0" max="60" step="1" value="${DEFAULTS.loss}"></label>
-        <label>Factor de planta (%)<input id="sc-cf" type="number" min="1" max="100" step="1" value="${DEFAULTS.plantFactor}"></label>
+        <label>Caudal de diseño (m³/s)<input id="sc-q" type="number" min="0" step="0.01" value="${isNum(S.scenario.q) ? S.scenario.q : +o.qDesign.toFixed(3)}"></label>
+        <label>Caudal ambiental<select id="sc-amb">
+          <option value="ena" ${S.scenario.amb === 'ena' ? 'selected' : ''}>ENA (planificación)</option>
+          <option value="conservador" ${S.scenario.amb === 'conservador' ? 'selected' : ''}>Conservador (Q75)</option>
+          <option value="libre" ${S.scenario.amb === 'libre' ? 'selected' : ''}>Valor propio</option></select></label>
+        <label>Caudal ambiental propio (m³/s)<input id="sc-ambv" type="number" min="0" step="0.01" value="${isNum(S.scenario.ambValue) ? S.scenario.ambValue : ''}" ${S.scenario.amb === 'libre' ? '' : 'disabled'}></label>
+        <label>Eficiencia (%)<input id="sc-eta" type="number" min="40" max="95" step="1" placeholder="auto" value="${isNum(S.scenario.eta) ? S.scenario.eta : ''}"></label>
       </div>
-      <div id="scenario-result" class="scenario-result">${scenarioText(o.qDesign, DEFAULTS.eta / 100, DEFAULTS.loss / 100, DEFAULTS.plantFactor / 100, o.head)}</div>
-      <p class="detail-note" style="margin-top:8px">El caudal inicial es la oferta disponible de año medio (ya descuenta el caudal ambiental estimado por el IDEAM). El factor de planta es un supuesto: la producción real depende de la curva de duración de caudales del sitio.</p>`;
+      <div id="scenario-result" class="scenario-result">${scenarioHTML(sc)}</div>`;
+    if (sel.originalSel)
+      html += `<button class="secondary-button wide-button" id="restore-option">${icon('arrow')} Volver al esquema original</button>`;
   } else {
     html += `<span class="source-badge">RED HIDROGRÁFICA UNIFICADA</span>
+      ${r.regFrac > 0.1 ? qualityPills(sel) : ''}
       <div class="detail-pill neutral">Desde este tramo no hay un esquema con salto ≥ ${S.params.minHead} m, conducción ≤ ${S.params.maxConduit} km y al menos ${S.params.minGradient} m de salto por km de conducción.</div>`;
   }
-  if (sel.kind === 'reach' || sel.kind === 'site') {
-    html += `<div class="detail-divider"></div><div class="detail-section-title">Buscar otro esquema desde este tramo</div>
-      <p class="detail-note">Ajusta los criterios y el navegador vuelve a recorrer el río aguas abajo con el perfil FABDEM.</p>
-      <div class="scenario-form params-form">
-        <label>Conducción máx. (km)<input id="pa-conduit" type="number" min="0.1" max="10" step="0.1" value="${S.params.maxConduit}"></label>
-        <label>Salto mínimo (m)<input id="pa-head" type="number" min="2" max="500" step="1" value="${S.params.minHead}"></label>
-        <label>Salto por km mín. (m/km)<input id="pa-grad" type="number" min="0" max="500" step="1" value="${S.params.minGradient}"></label>
-        <label>Recorrido máx. (km)<input id="pa-river" type="number" min="0.5" max="9" step="0.5" value="${S.params.maxRiver}"></label>
-      </div>
-      <button class="primary-button wide-button" id="research">${icon('arrow')} Buscar desde este tramo</button>`;
-    html += `<div class="detail-divider"></div>${kv([
+  html += `<div class="detail-divider"></div><div class="detail-section-title">Buscar otro esquema desde este tramo</div>
+    <p class="detail-note">Ajusta los criterios y el navegador vuelve a recorrer el río aguas abajo con el perfil FABDEM.</p>
+    <div class="scenario-form params-form">
+      <label>Conducción máx. (km)<input id="pa-conduit" type="number" min="0.1" max="10" step="0.1" value="${S.params.maxConduit}"></label>
+      <label>Salto mínimo (m)<input id="pa-head" type="number" min="2" max="500" step="1" value="${S.params.minHead}"></label>
+      <label>Salto por km mín. (m/km)<input id="pa-grad" type="number" min="0" max="500" step="1" value="${S.params.minGradient}"></label>
+      <label>Recorrido máx. (km)<input id="pa-river" type="number" min="0.5" max="9" step="0.5" value="${S.params.maxRiver}"></label>
+    </div>
+    <button class="primary-button wide-button" id="research">${icon('arrow')} Buscar desde este tramo</button>
+    <div class="detail-divider"></div>${kv([
       ['Cuenca aportante', fmt(r.upa, 1) + ' km²'], ['Longitud del tramo', fmt(r.length, 2) + ' km'],
       ['Orden del cauce (Strahler)', r.strahler], ['Subzona hidrográfica', subzoneName(r.szh)]])}`;
-  }
   return html;
 }
 
-function scenarioText(q, eta, loss, cf, head) {
-  const p = hydraulicPowerKW(q, head * (1 - loss), eta);
-  if (p === null) return 'Introduce un caudal para calcular la potencia.';
-  const mwh = p * 8760 * cf / 1000;
-  return `Potencia instalable de referencia<br><strong>${esc(power(p))}</strong><br>Energía anual estimada: ${mwh >= 1000 ? fmt(mwh / 1000, 2) + ' GWh' : fmt(mwh, 0) + ' MWh'} con factor de planta ${fmt(cf * 100)} %.`;
+function scenarioHTML(sc) {
+  if (!sc) return 'Introduce un caudal de diseño para calcular.';
+  const p = sc.pre, gwh = sc.energyMWh / 1000;
+  return `<div class="scenario-grid">
+    <div><span>Potencia instalable</span><strong>${esc(power(sc.pKW))}</strong>${p.capped ? '<small>limitada a 19,9 MW</small>' : ''}</div>
+    <div><span>Energía anual</span><strong>${gwh >= 1 ? fmt(gwh, 2) + ' GWh' : fmt(sc.energyMWh, 0) + ' MWh'}</strong><small>≈ ${fmt(sc.energyMWh * 1000 / 1800, 0)} hogares*</small></div>
+    <div><span>Factor de planta</span><strong>${fmt(sc.plantFactor * 100, 0)} %</strong></div>
+    <div><span>Turbina sugerida</span><strong>${esc(p.type)}</strong><small>${p.units} unidad${p.units > 1 ? 'es' : ''}</small></div>
+  </div>
+  ${kv([
+    ['Salto neto', `${fmt(p.hn, 1)} m (pérdidas ${fmt(p.lossPct, 0)} %)`],
+    ['Diámetro de la tubería', `${fmt(p.d, 2)} m · ${fmt(p.lp / 1000, 2)} km de tubería + ${fmt(p.lCanal / 1000, 2)} km de canal`],
+    ['Velocidad en la tubería', fmt(p.v, 1) + ' m/s'],
+    ['Eficiencia', fmt(sc.eta * 100, 0) + ' %' + (isNum(S.scenario.eta) ? ' (propia)' : ' (según turbina y tamaño)')],
+    ['Tiempo de arranque del agua', fmt(p.tw, 1) + ' s' + (p.tw > 3 ? ' · requiere chimenea o válvula de alivio' : '')],
+    ['Caudal ambiental supuesto', flow(sc.ambient)],
+    ['Caudal medio turbinado', flow(sc.qTurb)],
+  ])}
+  <p class="detail-note">* Hogares a 150 kWh/mes. Curva de duración lognormal calibrada con el IRH de la subzona (${isNum(sc.irh) ? fmt(sc.irh, 2) : 'sin dato, 0,65'}): es una estimación sin series diarias del sitio.</p>`;
 }
 
 function profileSVG(o) {
   const pts = o.path.filter(s => isNum(s.z));
   if (pts.length < 2) return '<p class="detail-note">El perfil no tiene elevaciones suficientes.</p>';
-  const w = 310, h = 150, L = 40, R = 10, T = 14, B = 26;
+  const w = 310, h = 175, L = 44, R = 10, T = 22, B = 28;
   let min = Math.min(...pts.map(s => s.z)), max = Math.max(...pts.map(s => s.z));
   const pad = Math.max(4, (max - min) * .15); min -= pad; max += pad;
   const len = pts.at(-1).d || 1;
   const x = d => L + d / len * (w - L - R), y = v => h - B - (v - min) / (max - min) * (h - T - B);
   const path = pts.map((s, i) => (i ? 'L' : 'M') + x(s.d).toFixed(1) + ',' + y(s.z).toFixed(1)).join(' ');
   const a = pts[0], b = pts.at(-1);
-  return `<svg class="profile" viewBox="0 0 ${w} ${h}" role="img" aria-label="Perfil del lecho del río: elevación en metros frente a distancia en kilómetros">
+  const stepY = [5, 10, 20, 50, 100, 200, 500].find(s => (max - min) / s <= 5) || 1000;
+  let ticks = '';
+  for (let v = Math.ceil(min / stepY) * stepY; v <= max; v += stepY)
+    ticks += `<path class="profile-grid" d="M${L} ${y(v).toFixed(1)}H${w - R}"/><text x="${L - 5}" y="${(y(v) + 3).toFixed(1)}" text-anchor="end">${fmt(v)}</text>`;
+  const stepX = len > 4 ? 1 : len > 2 ? 0.5 : 0.25;
+  for (let d = stepX; d < len; d += stepX) ticks += `<text x="${x(d).toFixed(1)}" y="${h - 10}" text-anchor="middle">${fmt(d, 2)}</text>`;
+  return `<svg class="profile" viewBox="0 0 ${w} ${h}" role="img" aria-label="Perfil del lecho: de ${fmt(a.z)} a ${fmt(b.z)} metros en ${fmt(len, 2)} kilómetros por el cauce">
+    <text x="${L}" y="12" class="profile-axis-title">Elevación (m s. n. m.)</text>
+    ${ticks}
     <path class="profile-axis" d="M${L} ${T}V${h - B}H${w - R}"/>
     <path class="profile-area" d="${path} L${x(b.d)},${h - B} L${x(a.d)},${h - B} Z"/>
     <path class="profile-line" d="${path}"/>
     <path class="profile-head" d="M${x(a.d)},${y(a.z)} H${x(b.d)} V${y(b.z)}"/>
     <text x="${x(b.d) - 4}" y="${(y(a.z) + y(b.z)) / 2}" text-anchor="end" class="profile-label">H ≈ ${fmt(o.head, 0)} m</text>
-    <circle cx="${x(a.d)}" cy="${y(a.z)}" r="3.5" class="profile-intake"/><circle cx="${x(b.d)}" cy="${y(b.z)}" r="3.5" class="profile-powerhouse"/>
-    <text x="${L - 5}" y="${T + 5}" text-anchor="end">${fmt(max)}</text><text x="${L - 5}" y="${h - B}" text-anchor="end">${fmt(min)}</text>
-    <text x="${L - 5}" y="${h / 2}" text-anchor="end">m</text><text x="${L}" y="${h - 8}">0</text>
-    <text x="${w - R}" y="${h - 8}" text-anchor="end">${fmt(len, 2)} km por el cauce</text></svg>`;
+    <circle cx="${x(a.d)}" cy="${y(a.z)}" r="4" class="profile-intake"/><rect x="${x(b.d) - 4}" y="${y(b.z) - 4}" width="8" height="8" class="profile-powerhouse"/>
+    <text x="${L}" y="${h - 10}" text-anchor="start">0</text><text x="${w - R}" y="${h - 10}" text-anchor="end">${fmt(len, 2)} km</text></svg>`;
 }
 
 function hydrologyHTML(sel) {
   const r = sel.reach, sz = S.subzonas?.[r.szh];
+  const sigma = fdcSigma(sz?.irh), qm = r.q.medio;
   let html = `<div class="detail-section-title" style="margin-top:0">Caudal regionalizado · ENA 2022 (IDEAM)</div>
-    ${kv([['Año medio (oferta total)', flow(r.q.medio)], ['Año seco (oferta total)', flow(r.q.seco)], ['Año húmedo (oferta total)', flow(r.q.humedo)],
-      ['Disponible año medio', flow(r.q.disp)], ['Disponible año seco', flow(r.q.dispSeco)]])}
-    <p class="detail-note" style="margin-top:10px">Rendimiento hídrico de la subzona × área aportante, acumulado por la red. "Disponible" descuenta el caudal ambiental estimado por el IDEAM. Son promedios anuales de largo plazo, no aforos ni caudales concedidos.</p>`;
-  if (r.external) html += '<div class="detail-pill">Parte de la cuenca de este tramo está fuera de la red cargada (frontera): el caudal puede estar subestimado.</div>';
-  if (sz) html += `<div class="detail-section-title">Subzona ${esc(r.szh)}</div>${kv([['Nombre', sz.name], ['Área hidrográfica', sz.area], ['Rendimiento año medio', fmt(sz.rend_medio, 1) + ' L/s/km²'], ['Rendimiento año seco', fmt(sz.rend_seco, 1) + ' L/s/km²'], ['Variación interanual (CV)', fmt(sz.cv_pct, 1) + ' %']])}`;
+    ${r.regFrac > 0.1 ? `<div class="detail-pill prohibition"><b>Caudal regulado${r.regName ? ' por ' + esc(r.regName) : ''}</b><br>El ${fmt(r.regFrac * 100)} % de la cuenca está aguas arriba de un embalse: estos valores describen el régimen natural, no el real.</div>` : ''}
+    ${kv([['Caudal medio, año medio', flow(r.q.medio)], ['Caudal medio, año seco', flow(r.q.seco)], ['Caudal medio, año húmedo', flow(r.q.humedo)],
+      ['Oferta disponible, año medio', flow(r.q.disp)], ['Oferta disponible, año seco', flow(r.q.dispSeco)]])}
+    <p class="detail-note" style="margin-top:10px">Rendimiento hídrico de la subzona × cuenca aportante, acumulado por la red. "Disponible" descuenta el caudal ambiental <b>de planificación</b> de la ENA; el exigible lo fija la autoridad ambiental en la concesión o la licencia. Son promedios de largo plazo: el error frente a estaciones del IDEAM puede ser de ±40 %, sobre todo en cabeceras.</p>`;
+  if (r.external) html += '<div class="detail-pill review">Parte de la cuenca de este tramo está fuera de la red cargada (frontera): el caudal puede estar subestimado.</div>';
+  html += `<div class="detail-section-title">Curva de duración estimada</div>
+    ${kv([['Q95', flow(fdcQ(qm, sigma, .95))], ['Q50 (mediana)', flow(fdcQ(qm, sigma, .5))], ['Q30', flow(fdcQ(qm, sigma, .3))],
+      ['IRH de la subzona', isNum(sz?.irh) ? fmt(sz.irh, 2) : 'Sin dato (se usa 0,65)']])}
+    <p class="detail-note">Lognormal con la media de la ENA y la dispersión que implica el Índice de Regulación Hídrica. Orientativa: sin series diarias del sitio.</p>`;
+  if (sz) html += `<div class="detail-section-title">Subzona ${esc(r.szh)}</div>${kv([['Nombre', sz.name], ['Área hidrográfica', sz.area],
+    ['Rendimiento, año medio', fmt(sz.rend_medio, 1) + ' L/s/km²'], ['Rendimiento, año seco', fmt(sz.rend_seco, 1) + ' L/s/km²'],
+    ['IUA, año medio / seco', `${sz.iua_medio || '—'} / ${sz.iua_seco || '—'}`]])}
+    ${/alto|cr[ií]tic/i.test(sz.iua_seco || '') ? '<div class="detail-pill review"><b>Uso del agua alto en año seco</b><br>Hay competencia por el agua en la subzona: revisar concesiones existentes aguas arriba.</div>' : ''}`;
   html += `<div class="detail-divider"></div><div class="detail-section-title">Contraste con otras fuentes</div>
-    ${kv([['Q95 Atlas UPME (clase)', r.q95 ? r.q95 + ' m³/s' : 'Sin correspondencia'], ['Caudal medio HydroRIVERS (1971–2000)', flow(r.qHydroRivers)]])}
-    <p class="detail-note" style="margin-top:10px">Q95: caudal superado el 95 % del tiempo, transferido desde la red UPME solo cuando la coincidencia es inequívoca. HydroRIVERS es un modelo global independiente: a nivel nacional su mediana coincide con la ENA (razón 0,99).</p>`;
+    ${kv([['Q95 Atlas UPME (clase indicativa)', r.q95 ? r.q95 + ' m³/s' : 'Sin correspondencia'], ['Caudal medio HydroRIVERS (1971–2000)', flow(r.qHydroRivers)]])}
+    <p class="detail-note" style="margin-top:10px">La clase Q95 de la UPME y el modelo global HydroRIVERS sirven de contraste, no de validación: son otros modelos. La validación real requiere series medidas del IDEAM.</p>`;
   html += `<div class="detail-divider"></div><div class="detail-section-title">Estaciones IDEAM cercanas</div>`;
   const st = S.data.stations?.features;
-  if (!st) { html += `<p class="detail-note">Activa la capa de estaciones para listarlas aquí.</p>`; void ensureLayerData('stations', 'data/stations.geojson', 'stations').then(() => S.selection === sel && S.tab === 'hydrology' && renderDetail()); }
+  if (!st) { html += `<p class="detail-note">Cargando estaciones…</p>`; void ensureLayerData('stations', 'data/stations.geojson', 'stations').then(() => S.selection === sel && S.tab === 'hydrology' && renderDetail()); }
   else {
     const near = st.map(f => ({p: f.properties, d: distance(sel.coord, f.geometry.coordinates)})).sort((a, b) => a.d - b.d).slice(0, 4);
     html += near.map(({p, d}) => `<div class="context-item"><b>${esc(p.name)}</b><p>${esc(p.code)} · ${esc(p.status)} · ${fmt(d, 1)} km<br>${esc(p.river || p.category || '')}</p></div>`).join('');
   }
-  html += `<div class="detail-pill neutral">Para un estudio se necesitan series diarias de caudal (curva de duración), calidad del dato y usos existentes. Se solicitan en DHIME.</div>${link('https://dhime.ideam.gov.co/atencionciudadano/', 'Consultar series en DHIME')}`;
+  html += `<div class="detail-pill neutral">Para un estudio se necesitan series diarias de caudal (curva de duración real), calidad del dato y usos existentes. El IDEAM publica caudales diarios de 943 estaciones en datos abiertos.</div>${link('https://www.datos.gov.co/d/jxnq-r3i9', 'Caudales diarios IDEAM (datos abiertos)')} · ${link('https://dhime.ideam.gov.co/atencionciudadano/', 'DHIME')}`;
   return html;
 }
 
@@ -534,27 +671,91 @@ function contextHTML(sel) {
     <p class="detail-note">Bocatoma, conducción, tramo con caudal reducido y casa de máquinas, con un margen de 100 m.</p>
     ${constraintPills(sel.kind === 'site' ? sel.site.m : r.mask, c?.hits)}`;
   if (c?.hits?.length) html += c.hits.map(h => `<div class="context-item"><b>${esc(h.name)}</b><p>${esc(h.category)}<br>${esc(h.status || '')}${h.act ? '<br>' + esc(h.act) : ''}${h.people ? '<br>Pueblo: ' + esc(h.people) : ''}</p>${h.url ? link(h.url) : ''}</div>`).join('');
+  if (c?.near_ethnic?.length || c?.near_spnn?.length) {
+    html += `<div class="detail-section-title">Cerca del corredor</div>`;
+    if (c.near_ethnic.length) html += `<div class="detail-pill consult"><b>Territorio étnico a ≤ 2 km:</b> ${esc(c.near_ethnic.map(e => `${e.name} (${fmt(e.km, 1)} km)`).join(', '))}<br>La consulta previa depende de la afectación directa, no solo del título: pedir pronunciamiento de procedencia a la Dirección de la Autoridad Nacional de Consulta Previa.</div>`;
+    if (c.near_spnn.length) html += `<div class="detail-pill review"><b>Parque Nacional a ≤ 5 km:</b> ${esc(c.near_spnn.map(e => `${e.name} (${fmt(e.km, 1)} km)`).join(', '))}<br>El entorno cumple una función amortiguadora (Decreto 1076, art. 2.2.2.1.3.10); si la zona amortiguadora está determinada, la licencia es de la ANLA con concepto de Parques.</div>`;
+  }
   html += `<div class="detail-divider"></div><div class="detail-section-title">Amenaza por movimientos en masa</div><div id="hazard-box">${hazardHTML()}</div>`;
-  html += `<div class="detail-divider"></div><div class="detail-section-title">Conexión e infraestructura</div>`;
-  if (c) {
-    html += kv([['Subestación más cercana', `${c.substation.name} · ${fmt(c.substation.kv)} kV · ${fmt(c.substation.km, 1)} km`],
-      ['Línea de transmisión más cercana', `${c.line.name || 'Sin nombre'} · ${fmt(c.line.kv)} kV · ${fmt(c.line.km, 1)} km`],
-      ['Municipio', c.municipality], ['Departamento', c.department]]);
-    if (c.existing_plants?.length) html += `<div class="detail-pill"><b>Central existente a menos de 2 km del corredor:</b> ${esc(c.existing_plants.map(p => `${p.name} (${fmt(p.mw, 1)} MW)`).join(', '))}. Es posible que este salto ya esté aprovechado.</div>`;
-    if (c.assigned_projects?.length) html += `<div class="detail-pill"><b>Proyecto con capacidad asignada cerca:</b> ${esc(c.assigned_projects.map(p => `${p.name} (${fmt(p.mw, 1)} MW, ${p.state})`).join(', '))}.</div>`;
+  html += `<div class="detail-divider"></div><div class="detail-section-title">Conexión a la red</div>`;
+  if (c?.grid) {
+    const g = c.grid, t = g.target;
+    html += kv([['Nivel de tensión sugerido', `${g.level_kv} kV`], ['Subestación objetivo', `${t.name} · ${t.kv} kV`],
+      t.mva ? ['Capacidad y carga', `${fmt(t.mva, 1)} MVA · ${fmt(t.load_pct, 0)} % de carga`] : null,
+      ['Distancia en línea recta', fmt(g.km, 1) + ' km (trazado ≈ ×1,3)'],
+      ['Costo indicativo de conexión', `${fmt(g.cost_mcop)} millones COP (${fmt(g.cost_mcop_kw, 2)} M/kW)`]]);
+    html += `<p class="detail-note" style="margin-top:8px">Se elige la opción más barata que cumple la caída de tensión (13,2 kV hasta 15 MW·km; 34,5 kV hasta 200 MW·km). Fuente: subestaciones de distribución UPME (con MVA y carga) y transmisión UPME. La cercanía no acredita capacidad disponible: la confirma el operador de red o la UPME.</p>`;
+    html += kv([['Municipio', c.municipality], ['Departamento', c.department]]);
+    if (c.existing_plants?.length) html += `<div class="detail-pill prohibition"><b>Central existente a menos de 2 km del corredor:</b> ${esc(c.existing_plants.map(p => `${p.name} (${fmt(p.mw, 1)} MW)`).join(', '))}.</div>`;
+    if (c.assigned_projects?.length) html += `<div class="detail-pill review"><b>Proyecto con capacidad asignada cerca:</b> ${esc(c.assigned_projects.map(p => `${p.name} (${fmt(p.mw, 1)} MW, ${p.state})`).join(', '))}.</div>`;
     if (c.municipal_plants?.length) html += `<div class="detail-pill neutral">En el municipio hay centrales con ubicación aproximada: ${esc(c.municipal_plants.join(', '))}.</div>`;
   } else {
-    const subs = S.data.substations?.features;
-    const ref = sel.option?.powerhouse || sel.coord;
-    if (subs) {
-      const n = subs.map(f => ({p: f.properties, d: distance(ref, f.geometry.coordinates)})).sort((a, b) => a.d - b.d)[0];
-      html += kv([['Subestación más cercana', `${n.p.name} · ${fmt(n.p.voltageKV)} kV · ${fmt(n.d, 1)} km`]]);
-    } else html += '<p class="detail-note">Cargando subestaciones…</p>';
+    const subs = S.data.substations?.features, ref = sel.option?.powerhouse || sel.coord;
+    if (subs) { const n = subs.map(f => ({p: f.properties, d: distance(ref, f.geometry.coordinates)})).sort((a, b) => a.d - b.d)[0];
+      html += kv([['Subestación de transmisión más cercana', `${n.p.name} · ${fmt(n.p.voltageKV)} kV · ${fmt(n.d, 1)} km`]]) + '<p class="detail-note">El análisis de la red de distribución está disponible en los sitios candidatos.</p>'; }
+    else html += '<p class="detail-note">Cargando subestaciones…</p>';
   }
-  html += `<p class="detail-note" style="margin-top:10px">La cercanía a una subestación o línea no acredita capacidad de conexión disponible.</p>`;
   html += `<div class="detail-divider"></div>${kv([['Bocatoma (lat, lon)', sel.option ? `${fmt(sel.option.intake[1], 5)}, ${fmt(sel.option.intake[0], 5)}` : `${fmt(sel.coord[1], 5)}, ${fmt(sel.coord[0], 5)}`],
     sel.option && ['Casa de máquinas (lat, lon)', `${fmt(sel.option.powerhouse[1], 5)}, ${fmt(sel.option.powerhouse[0], 5)}`]])}`;
   return html;
+}
+
+function businessHTML(sel) {
+  const sc = computeScenario(sel), c = sel.context;
+  if (!sc) return '<p class="detail-note">Este tramo no tiene un esquema calculado. Prueba "Buscar otro esquema" en el resumen.</p>';
+  const e = economics({pKW: sc.pKW, head: sc.pre.hn, energyMWh: sc.energyMWh, tunnelKm: c?.tunnel_km || 0, gridMCOP: c?.grid?.cost_mcop || 0, opts: S.econ});
+  const o = e.o;
+  const usd = v => v >= 1e6 ? `${fmt(v / 1e6, 1)} M USD` : `${fmt(v / 1e3, 0)} mil USD`;
+  const tags = c?.regulatory || [];
+  return `<div class="detail-pill review" style="margin-top:0"><b>Orden de magnitud, no presupuesto.</b> Costos de referencia internacional (IRENA) ajustados por tamaño y salto; banda de −30 % a +50 %. Sin impuestos, deuda ni costos de desarrollo.</div>
+    <div class="scenario-grid">
+      <div><span>Inversión indicativa</span><strong>${usd(e.capex)}</strong><small>${usd(e.capexLow)} – ${usd(e.capexHigh)}</small></div>
+      <div><span>Por kW instalado</span><strong>${fmt(e.capex / sc.pKW, 0)} USD/kW</strong></div>
+      <div><span>Costo nivelado</span><strong>${fmt(e.lcoeCOP, 0)} COP/kWh</strong><small>${e.lcoeCOP <= o.priceCOPkWh ? 'por debajo' : 'por encima'} del precio supuesto</small></div>
+      <div><span>Retorno simple</span><strong>${isFinite(e.payback) ? fmt(e.payback, 1) + ' años' : 'No se recupera'}</strong></div>
+    </div>
+    ${kv([['Planta (obras y equipos)', usd(e.plantUSD)], e.tunnelUSD ? ['Túnel probable', usd(e.tunnelUSD)] : null,
+      ['Conexión a la red', e.gridUSD ? usd(e.gridUSD) : 'Sin dato (solo en sitios candidatos)'],
+      ['Energía anual', fmt(sc.energyMWh / 1000, 2) + ' GWh'], ['Ingresos anuales', `${fmt(e.revenueCOP / 1e6, 0)} millones COP`]])}
+    <div class="detail-section-title">Supuestos editables</div>
+    <div class="scenario-form econ-form">
+      <label>Precio de venta (COP/kWh)<input id="ec-price" type="number" min="50" max="3000" step="10" value="${o.priceCOPkWh}"></label>
+      <label>TRM (COP/USD)<input id="ec-trm" type="number" min="1000" max="10000" step="50" value="${o.trm}"></label>
+      <label>Tasa de descuento (%)<input id="ec-rate" type="number" min="1" max="30" step="0.5" value="${o.rate * 100}"></label>
+      <label>Vida útil (años)<input id="ec-years" type="number" min="10" max="60" step="1" value="${o.years}"></label>
+    </div>
+    <p class="detail-note">Referencias: contratos de largo plazo ~300–335 COP/kWh; bolsa 2022–2026 entre ~220 y ~680 COP/kWh de promedio anual, con picos en El Niño, cuando una central a filo de agua produce menos. En zonas no interconectadas la referencia es el diésel (~1.400 COP/kWh).</p>
+    <div class="detail-section-title">Clase regulatoria</div>
+    ${tags.length ? `<ul class="plain-list">${tags.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : '<p class="detail-note">Disponible en los sitios candidatos.</p>'}`;
+}
+
+function stepsHTML(sel) {
+  const o = sel.option, c = sel.context, mask = sel.kind === 'site' ? sel.site.m : sel.reach.mask;
+  const pKW = o?.pKW || 0;
+  const zni = !!c?.zni;
+  const ethnic = (mask & (32 | 64)) || c?.near_ethnic?.length;
+  const forest = (mask & 16) || (c?.hits || []).some(h => /reserva forestal protectora/i.test(h.category || ''));
+  const paramo = mask & 8;
+  const anla = pKW >= 100000 || c?.near_spnn?.length;
+  const steps = [
+    ['Verificar el sitio en campo', 'Topografía del salto, aforos de caudal y recorrido de la conducción. Revisar las alertas de calidad de la ficha.', 'Consultor', '1–3 meses'],
+    ['Predios y uso del suelo', 'Estudio de títulos (folios de matrícula) y certificado de uso del suelo según el POT o EOT del municipio.', 'Oficina de Registro · Alcaldía', 'Semanas'],
+    ['Permiso de estudio del recurso hídrico', 'Da prioridad frente a otros solicitantes de concesión.', 'Corporación autónoma regional (CAR)', '1–3 meses'],
+    ['Determinantes ambientales y DAA', 'Pedir a la CAR los determinantes (POMCA, rondas, áreas protegidas) y su pronunciamiento sobre la necesidad del Diagnóstico Ambiental de Alternativas (Decreto 1076, art. 2.2.2.3.4.2).', 'CAR', '1–3 meses'],
+    ['Registro del proyecto en la UPME (fase 1)', 'Registro de proyectos de generación por fases (Resolución UPME 749 de 2025).', 'UPME', '1 mes'],
+  ];
+  if (ethnic) steps.push(['Procedencia de consulta previa', 'Solicitar el pronunciamiento de procedencia. Si procede: preconsulta, consulta y protocolización.', 'Dirección de la Autoridad Nacional de Consulta Previa (MinInterior)', '1–3 meses; consulta 6–24+ meses']);
+  if (forest) steps.push(['Sustracción de la reserva forestal', 'Antes de la licencia (Resolución 1705 de 2024).', 'MinAmbiente (o la CAR en reservas regionales)', '6–18 meses']);
+  if (paramo) steps.push(['Concepto previo del MinAmbiente (páramo)', 'Ley 1930 de 2018, art. 5 par. 2. En la práctica, las obras en páramo son inviables.', 'MinAmbiente', '—']);
+  if (zni && pKW <= 10000) steps.push(['Concesión de aguas y ocupación de cauce', 'En zonas no interconectadas, las centrales de hasta 10 MW no requieren licencia ambiental, pero sí estos permisos.', 'CAR', '3–9 meses']);
+  else steps.push(['Estudio de impacto ambiental y licencia', `${anla ? 'Licencia de la ANLA (≥ 100 MW o zona amortiguadora determinada de un Parque Nacional).' : 'Licencia de la CAR: en el sistema interconectado toda hidroeléctrica de menos de 100 MW la requiere.'} La licencia incluye la concesión de aguas (20 a 50 años), la ocupación de cauce y los aprovechamientos.`, anla ? 'ANLA' : 'CAR', 'EIA 8–14 meses; evaluación 4–12 meses']);
+  steps.push(['Arqueología preventiva', 'Registro, diagnóstico y plan de manejo aprobado antes de obras (Decreto 138 de 2019).', 'ICANH', '3–9 meses']);
+  if (!zni) steps.push(['Conexión a la red', `Solicitud de capacidad de transporte y concepto de conexión${c?.grid ? ` (nivel sugerido ${c.grid.level_kv} kV)` : ''} (CREG 075 de 2021).`, pKW < 1000 ? 'Operador de red' : 'UPME · operador de red', '6–18 meses']);
+  steps.push(['Servidumbres y predios', 'Servidumbres de conducción de aguas y de línea eléctrica.', 'Propietarios · juez si no hay acuerdo', '6–24 meses']);
+  steps.push(['Registro para operar', `${pKW >= 1000 ? 'Registro como planta menor ante XM' : 'Registro como generación distribuida o autogeneración'}${pKW > 10000 ? '; transferencias del 6 % de las ventas (Ley 99, art. 45)' : ''}.`, pKW >= 1000 ? 'XM' : 'Operador de red', 'Antes de operar']);
+  return `<div class="detail-pill neutral" style="margin-top:0">Ruta general de trámites para una PCH en Colombia, adaptada a las alertas de este sitio. Revisada por el abogado del panel; no reemplaza asesoría legal. <b>Duración realista antes de construir: 3 a 6 años.</b></div>
+    <ol class="steps-list">${steps.map(([t, d, who, time]) => `<li><b>${esc(t)}</b><p>${esc(d)}</p><small>${esc(who)} · ${esc(time)}</small></li>`).join('')}</ol>
+    <p class="detail-note">Fuentes: Decreto 1076 de 2015; Ley 21 de 1991; Ley 1930 de 2018; Resolución MADS 1705 de 2024; Resolución UPME 749 de 2025; CREG 075 de 2021; Decreto 138 de 2019.</p>`;
 }
 
 // Consulta en vivo del resumen municipal de amenaza del SGC (no se redistribuyen sus datos).
@@ -629,15 +830,26 @@ async function updateMiniMap() {
 function filteredSites() {
   return S.sites.filter(f => {
     const p = f.properties;
-    if (S.power !== 'all' && p.c !== Number(S.power)) return false;
+    if (S.power === 'pch' && p.c > 5) return false;                               // por defecto: solo ≤ 20 MW
+    if (S.power !== 'pch' && S.power !== 'all' && p.c !== Number(S.power)) return false;
     if (S.area && p.ah !== S.area) return false;
-    if (S.constraint === 'no-spnn' && (p.m & (1 | 256))) return false;          // Parques Nacionales y embalses
+    if (S.dept && p.d !== S.dept) return false;
+    if (S.maxGrid && !(p.gkm <= Number(S.maxGrid))) return false;
+    if (S.hideRegulated && (p.qf & 8)) return false;                              // caudal regulado por embalse
+    if (S.hideQuality && (p.qf & 3)) return false;                                // salto concentrado o gradiente atípico
+    if (S.constraint === 'no-spnn' && (p.m & (1 | 256))) return false;           // Parques Nacionales y embalses
     if (S.constraint === 'no-ethnic' && (p.m & (1 | 256 | 32 | 64))) return false;
     if (S.constraint === 'clean' && p.m) return false;
     return true;
   });
 }
 function applyFilters() { S.listLimit = 20; setData('sites', fc(filteredSites())); renderList(); renderMapKey(); }
+function visibleSites() {
+  let fs = filteredSites();
+  if ($('#viewport-only').checked && S.mapReady) { const b = map.getBounds(); fs = fs.filter(f => b.contains(f.geometry.coordinates)); }
+  return fs.slice().sort((a, b) => b.properties.p - a.properties.p);
+}
+const QUALITY_LABELS = {1: 'salto concentrado', 2: 'pendiente atípica', 4: 'túnel probable', 8: 'caudal regulado'};
 function renderList() {
   const list = $('#site-list'); if (!list) return;
   if (S.view === 'saved') {
@@ -646,23 +858,41 @@ function renderList() {
       : '<div class="saved-empty"><p>Selecciona un lugar y pulsa <b>Guardar lugar</b>. Quedará guardado en este navegador.</p></div>';
     return;
   }
-  let fs = filteredSites();
-  if ($('#viewport-only').checked && S.mapReady) { const b = map.getBounds(); fs = fs.filter(f => b.contains(f.geometry.coordinates)); }
-  fs = fs.slice().sort((a, b) => b.properties.p - a.properties.p);
+  const fs = visibleSites();
   $('#results-title').textContent = 'Sitios por potencia'; $('#result-count').textContent = fmt(fs.length);
   list.innerHTML = fs.slice(0, S.listLimit).map(f => {
     const p = f.properties, band = bandOf(p.p);
-    return `<button class="opportunity-item ${S.selection?.site?.id === p.id ? 'selected' : ''}" data-site="${p.id}">${symbolSVG('power-' + band.key)}<span><span class="op-name">${esc(riverTitle(p.n))}</span><span class="op-area">${esc([p.mu, p.d].filter(Boolean).join(' · '))} · H ${fmt(p.h)} m${p.m ? ' · ⚠' : ''}</span></span><span class="op-power">${esc(power(p.p))}</span></button>`;
+    const warn = [p.m ? 'restricciones' : '', ...Object.entries(QUALITY_LABELS).filter(([b]) => p.qf & b).map(([, l]) => l)].filter(Boolean);
+    return `<button class="opportunity-item ${S.selection?.site?.id === p.id ? 'selected' : ''} ${p.c === 6 ? 'over' : ''}" data-site="${p.id}">${symbolSVG('power-' + band.key)}<span><span class="op-name">${esc(riverTitle(p.n))}</span><span class="op-area">${esc([p.mu, p.d].filter(Boolean).join(' · '))} · salto ${fmt(p.h)} m · red ${fmt(p.gkm)} km</span>${warn.length ? `<span class="op-warn"><span aria-hidden="true">⚠</span> ${esc(warn.join(', '))}</span>` : ''}</span><span class="op-power">${esc(power(p.p))}</span></button>`;
   }).join('') || '<p class="empty-list">No hay sitios con estos filtros.</p>';
   if (fs.length > S.listLimit) list.innerHTML += `<button class="text-button wide-button" id="list-more">Ver más sitios (${fmt(fs.length - S.listLimit)}) ${icon('arrow')}</button>`;
 }
-
+/** Exporta a CSV la lista filtrada (revisión de negocios): abre en Excel con separador ';' y decimales con coma. */
+function exportCSV() {
+  const cols = [['id', p => p.id], ['rio', p => riverTitle(p.n)], ['municipio', p => p.mu], ['departamento', p => p.d], ['area_hidrografica', p => p.ah],
+    ['potencia_kW', p => p.p], ['salto_m', p => p.h], ['conduccion_km', p => p.lc], ['caudal_diseno_m3s', p => p.q], ['potencia_ano_seco_kW', p => p.ps],
+    ['distancia_red_km', p => p.gkm], ['tension_sugerida_kV', p => p.glv], ['costo_conexion_MCOP', p => p.gc], ['tunel_probable_km', p => p.tun],
+    ['regulado_fraccion', p => p.reg], ['posible_ZNI', p => p.zni ? 'sí' : 'no'],
+    ['restricciones', p => constraintsOf(p.m).map(c => c.label).join(' | ')], ['alertas_calidad', p => Object.entries(QUALITY_LABELS).filter(([b]) => p.qf & b).map(([, l]) => l).join(' | ')],
+    ['lat_bocatoma', (p, f) => f.geometry.coordinates[1]], ['lon_bocatoma', (p, f) => f.geometry.coordinates[0]]];
+  const cell = v => { const s = typeof v === 'number' ? String(v).replace('.', ',') : String(v ?? ''); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const rows = visibleSites().map(f => cols.map(([, g]) => cell(g(f.properties, f))).join(';'));
+  const csv = '\ufeff' + cols.map(c => c[0]).join(';') + '\n' + rows.join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'}));
+  a.download = `atlas-pch-sitios-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toast(`Descargados ${fmt(rows.length)} sitios en CSV.`);
+}
 /* ───────────── Búsqueda ───────────── */
 async function ensureRiverSearch() { if (!S.riverSearch) S.riverSearch = json(V + 'rivers-search.json.gz').catch(() => []); return S.riverSearch; }
 async function search() {
   const q = normalize($('#search').value.trim()), el = $('#search-results');
   if (q.length < 2) { el.hidden = true; return; }
   const results = [];
+  const idMatch = q.match(/^(?:sitio\s*)?(?:n\.?\s*º?\s*)?(\d{1,6})$/);
+  if (idMatch && S.siteById.has(Number(idMatch[1]))) {
+    const f = S.siteById.get(Number(idMatch[1]));
+    results.push({type: 'site', title: `Sitio n.º ${idMatch[1]} · ${riverTitle(f.properties.n)}`, subtitle: `${power(f.properties.p)} · ${f.properties.mu}, ${f.properties.d}`, value: f});
+  }
   const rivers = await ensureRiverSearch();
   if (normalize($('#search').value.trim()) !== q) return;
   rivers.filter(r => normalize(r.name).includes(q)).map(r => {
@@ -672,7 +902,10 @@ async function search() {
     .forEach(({r}) => results.push({type: 'river', title: r.name, subtitle: `Río · cuenca ${fmt(r.upstream_km2)} km²`, value: r}));
   const munis = new Map();
   for (const f of S.sites) { const p = f.properties; if (p.mu && normalize(p.mu).includes(q) && !munis.has(p.mu + p.d)) munis.set(p.mu + p.d, f); if (munis.size >= 4) break; }
-  for (const f of munis.values()) results.push({type: 'municipality', title: f.properties.mu, subtitle: `Municipio · ${f.properties.d}`, value: f});
+  // Los municipios cuyo nombre coincide exactamente van primero (revisión del usuario final: 'Pasto' salía de último)
+  const muniRes = [...munis.values()].map(f => ({type: 'municipality', title: f.properties.mu, subtitle: `Municipio · ${f.properties.d}`, value: f}));
+  results.splice(idMatch ? 1 : 0, 0, ...muniRes.filter(m => normalize(m.title) === q));
+  results.push(...muniRes.filter(m => normalize(m.title) !== q));
   for (const f of [...(S.data.plants?.features || []), ...(S.data.municipalPlants?.features || [])]) { if (normalize(f.properties.name).includes(q)) results.push({type: 'plant', title: f.properties.name, subtitle: `Central · ${f.properties.department || ''}`, value: f}); if (results.length >= 12) break; }
   for (const f of S.data.departments?.features || []) if (normalize(f.properties.name).includes(q)) results.push({type: 'department', title: f.properties.name, subtitle: 'Departamento', value: f});
   el.innerHTML = results.length ? results.map((r, i) => `<button class="search-result" data-search="${i}"><b>${esc(r.title)}</b><small>${esc(r.subtitle)}</small></button>`).join('') : '<p class="empty-list">Sin resultados.</p>';
@@ -681,7 +914,8 @@ async function search() {
     const b = e.target.closest('[data-search]'); if (!b) return;
     const r = results[+b.dataset.search]; el.hidden = true; $('#search').value = r.title;
     if (r.type === 'river') { map.flyTo({center: r.value.center, zoom: 10, duration: 650}); await selectReach(r.value.id, r.value.cell, r.value.center); }
-    else if (r.type === 'municipality') { map.flyTo({center: r.value.geometry.coordinates, zoom: 10, duration: 650}); $('#viewport-only').checked = true; setTimeout(renderList, 800); }
+    else if (r.type === 'municipality') { map.flyTo({center: r.value.geometry.coordinates, zoom: 10, duration: 650}); $('#viewport-only').checked = true; $('#map-region').textContent = ` · ${r.value.properties.d}`; $('#sidebar').classList.remove('mobile-open'); setTimeout(renderList, 800); }
+    else if (r.type === 'site') { $('#sidebar').classList.remove('mobile-open'); selectSite(r.value); }
     else if (r.type === 'department') { map.fitBounds(bboxOf(r.value.geometry), {padding: 55, duration: 650}); $('#map-region').textContent = r.title; }
     else selectFeature('plant', r.value);
   };
@@ -725,24 +959,24 @@ function exportSite() {
 
 /* ───────────── Fuentes y metodología ───────────── */
 function renderSources() {
-  const m = S.manifest || {}, rep = m.reports || {}, sites = rep.sites || {}, hyd = rep.hydrology || {}, ctx = rep.context || {}, prof = rep.profile || {};
-  const par = sites.parameters || {};
-  $('#sources-content').innerHTML = `<p>Herramienta de <b>exploración preliminar</b> a escala nacional. Cada número indica su fuente y su método. Ningún resultado es un diseño, una concesión de aguas ni una licencia: todos requieren estudios de campo. Datos procesados el ${esc(m.generated || '')}.</p>
+  const m = S.manifest || {}, rep = m.reports || {}, sites = rep.sites || {}, ctx = rep.context || {}, prof = rep.profile || {};
+  const par = sites.parameters || {}, val = (S.validation || {}).existing_plants || {};
+  $('#sources-content').innerHTML = `<p>Herramienta de <b>exploración preliminar</b> de sitios para <b>pequeñas centrales hidroeléctricas (PCH, hasta 20 MW)</b>. Cada número indica su fuente y su método. Ningún resultado es un diseño, una concesión de aguas ni una licencia: todos requieren estudios de campo. Datos procesados el ${esc(m.generated || '')}. Revisada por un panel de 8 especialistas (hidrología, mecánica de PCH, negocios, derecho ambiental, SIG, mercado eléctrico, usuario final y diseño).</p>
   <div class="method-box"><h3>Cómo se calcula un sitio candidato</h3><p>
-   1) <b>Caudal</b>: rendimiento hídrico de cada subzona (IDEAM, Estudio Nacional del Agua 2022) × área aportante de cada tramo, acumulado por la red. Se usa la <b>oferta disponible de año medio</b>, que ya descuenta el caudal ambiental estimado por el IDEAM.<br>
-   2) <b>Salto</b>: perfil del lecho cada ≤100 m con FABDEM (sin bosque ni edificios), mínimo 3×3 píxeles y condicionamiento hidrológico (promedio de perfiles tallado y rellenado).<br>
-   3) <b>Esquema</b>: desde cada estación se busca la casa de máquinas aguas abajo (≤${fmt(par.max_river_km)} km por el cauce) con más salto, con conducción en línea recta ≤${fmt(par.max_conduit_km)} km, salto ≥${fmt(par.min_head_m)} m y ≥${fmt(par.min_gradient_m_per_km)} m de salto por km de conducción.<br>
-   4) <b>Potencia</b> = 9,81 × Q × H × (1 − ${fmt((par.head_loss || 0) * 100)} %) × ${fmt(par.efficiency, 2)}.<br>
+   1) <b>Caudal</b>: rendimiento hídrico de cada subzona (IDEAM, Estudio Nacional del Agua 2022) × cuenca aportante, acumulado por la red. El caudal de diseño es la <b>oferta disponible de año medio</b>, que descuenta el caudal ambiental <i>de planificación</i> de la ENA (el exigible lo fija la autoridad ambiental). La energía sale de una curva de duración lognormal calibrada con el índice de regulación hídrica (IRH) de la subzona.<br>
+   2) <b>Salto</b>: perfil del lecho cada ≤100 m con FABDEM (sin bosque ni edificios): mínimo de 3×3 píxeles, mediana móvil con contexto de los tramos vecinos y condicionamiento por tramo. Se descartan bocatomas más de 5 m por encima del río aguas arriba.<br>
+   3) <b>Esquema</b>: desde cada estación se busca la casa de máquinas aguas abajo (≤${fmt(par.max_river_km)} km por el cauce) con más salto, con conducción en línea recta ≤${fmt(par.max_conduit_km)} km, salto ≥${fmt(par.min_head_m)} m y ≥${fmt(par.min_gradient_m_per_km)} m de salto por km. Bocatoma y casa de máquinas dentro de Colombia.<br>
+   4) <b>Potencia de referencia</b> = 9,81 × Q × H × (1 − ${fmt((par.head_loss || 0) * 100)} %) × ${fmt(par.efficiency, 2)}. En la ficha se refina con salto neto, turbina y eficiencia por tipo y tamaño (prediseño).<br>
    5) <b>Sin solapes</b>: de mayor a menor potencia, se descarta un sitio si su tramo intervenido ya pertenece a otro. Resultado: ${fmt(sites.sites)} sitios ≥ ${fmt(par.min_site_kw)} kW.<br>
-   6) <b>Corredor</b>: bocatoma, conducción, tramo reducido y casa de máquinas se cruzan (margen ${fmt(ctx.corridor_buffer_m)} m) con áreas protegidas, páramos, reservas Ley 2ª, resguardos, consejos comunitarios y zonas de reserva campesina.</p></div>
-  <div class="source-row"><h3>Red hidrográfica<br>${fmt(m.counts?.reaches)} tramos</h3><div><p>HydroSHEDS v2 (≈30 m, cuenca mínima 1 km²) como única geometría; nombres IGAC 1:25.000/1:100.000 por coincidencia espacial. Servida en teselas PMTiles.</p>${link('https://www.hydrosheds.org/products/hydrosheds-v2', 'HydroSHEDS v2 · CC BY 4.0')}</div></div>
-  <div class="source-row"><h3>Caudal</h3><div><p>IDEAM, ENA 2022, Anexo 1: oferta total y disponible (año medio, seco y húmedo) de las 316 subzonas; polígonos de subzona publicados por la UPME (zonificación IDEAM 2013). Contraste con HydroRIVERS en ${fmt(hyd.contrast_hydrorivers?.pairs)} tramos: mediana de la razón ${fmt(hyd.contrast_hydrorivers?.ratio_ena_hydrorivers_median, 2)}; ${fmt(hyd.contrast_hydrorivers?.within_factor_2_pct, 0)} % dentro de un factor 2. Clase Q95 de la UPME transferida a ${fmt(hyd.q95_transferred)} tramos.</p>${link('https://www.ideam.gov.co/nuestra-entidad/hidrologia/estudio-nacional-del-agua-2022', 'ENA 2022')} · ${link('https://geo.upme.gov.co/server/rest/services/Capas_FuenteEnergia_Hidraulica', 'Capas hidráulicas UPME')}</div></div>
-  <div class="source-row"><h3>Elevación</h3><div><p>FABDEM V1-2 (Copernicus WorldDEM-30 © DLR e.V., sin bosques ni edificios). ${fmt(prof.stations)} estaciones del lecho. Mosaicos verificados contra el CRC32 del archivo oficial de la Universidad de Bristol. <b>Licencia CC BY-NC-SA 4.0: uso no comercial.</b> El relieve 3D del mapa usa Copernicus GLO-30 (Mapterhorn) solo como visualización.</p>${link('https://data.bris.ac.uk/data/dataset/s5hqmjcdj8yo2ibzi9b4ew3sn', 'FABDEM')}</div></div>
-  <div class="source-row"><h3>Restricciones</h3><div><p>RUNAP (Parques Nacionales), páramos y reservas Ley 2ª (MinAmbiente), resguardos indígenas y consejos comunitarios (Agencia Nacional de Tierras, 2026), zonas de reserva campesina (UPME), embalses existentes (IGAC 1:100.000 y OpenStreetMap © colaboradores, ODbL). Amenaza por movimientos en masa: servicio en vivo del SGC (no se redistribuye). Faltan determinantes de POMCA y POT, concesiones de agua existentes (RURH), vedas y decisiones judiciales.</p>${link('https://runap.parquesnacionales.gov.co/', 'RUNAP')} · ${link('https://data-agenciadetierras.opendata.arcgis.com/', 'Datos abiertos ANT')}</div></div>
-  <div class="source-row"><h3>Infraestructura</h3><div><p>Centrales XM / UPME; subestaciones y líneas de transmisión UPME; proyectos con capacidad de transporte asignada (UPME); estaciones IDEAM. Referencias del Atlas UPME 2015 disponibles como capa de comparación.</p>${link('https://paratec.xm.com.co/', 'XM–PARATEC')} · ${link('https://geo.upme.gov.co/server/rest/services/Capas_EnergiaElectrica', 'Capas eléctricas UPME')}</div></div>
-  <div class="method-box"><h3>Límites que el revisor debe tener presentes</h3><p>• El rendimiento es un promedio por subzona: no capta diferencias entre cabecera y valle dentro de ella.<br>• El salto viene de un modelo global (error de pocos metros): saltos menores de ~20 m son inciertos.<br>• FABDEM refleja el terreno de 2011–2015: presas y embalses posteriores se marcan con la capa de embalses, pero otras obras recientes pueden no estar.<br>• Contraste con 35 PCH existentes: todas tienen un esquema a menos de 3 km; la potencia estimada tiende a superar la instalada (mediana ×1,6), porque se toma el mejor esquema posible.<br>• La conducción se mide en línea recta; el trazado real será más largo.<br>• No se evalúan geotecnia, accesos, sedimentos, usos del agua existentes ni costos.<br>• Las coincidencias del corredor son alertas para revisar, no conceptos jurídicos.</p></div>`;
+   6) <b>Corredor y entorno</b>: bocatoma, conducción, tramo reducido y casa de máquinas (margen ${fmt(ctx.corridor_buffer_m)} m) frente a áreas protegidas, páramos, Ley 2ª, territorios étnicos, zonas de reserva campesina y embalses; proximidad a territorios étnicos (≤ 2 km) y Parques Nacionales (≤ 5 km); túnel probable; caudal regulado; conexión a la red de distribución.</p></div>
+  <div class="method-box"><h3>Validación</h3><p>Frente a ${fmt(val.small_plants_le_20mw)} PCH existentes con coordenada XM, comparando solo esquemas de caudal parecido (½ a 2 veces el real) y con tope de 19,9 MW: ${fmt(val.small_with_comparable_scheme_pct, 0)} % tiene un esquema comparable a ≤ 3 km; la potencia estimada da ${fmt(val.small_ratio_estimated_over_installed_median, 2)} veces la instalada en mediana (rango central ${fmt(val.small_ratio_p25_p75?.[0], 2)}–${fmt(val.small_ratio_p25_p75?.[1], 2)}). Frente a estaciones del IDEAM, el caudal de la ENA puede diferir ±40 %, sobre todo en cabeceras: la calibración con series diarias es la siguiente mejora prevista.</p></div>
+  <div class="source-row"><h3>Red hidrográfica<br>${fmt(m.counts?.reaches)} tramos</h3><div><p>HydroSHEDS v2 (≈30 m, cuenca mínima 1 km²) como única geometría; nombres IGAC 1:25.000/1:100.000 por coincidencia espacial. Teselas PMTiles.</p>${link('https://www.hydrosheds.org/products/hydrosheds-v2', 'HydroSHEDS v2 · CC BY 4.0')}</div></div>
+  <div class="source-row"><h3>Caudal</h3><div><p>IDEAM, ENA 2022: Anexo 1 (oferta total y disponible de las 316 subzonas) y Anexo 2 (IRH e IUA). Subzonas publicadas por la UPME (zonificación IDEAM 2013). Clase Q95 de la UPME y HydroRIVERS como contraste, no como validación. Embalses (IGAC y OpenStreetMap) para marcar el caudal regulado.</p>${link('https://www.ideam.gov.co/nuestra-entidad/hidrologia/estudio-nacional-del-agua-2022', 'ENA 2022')} · ${link('https://www.datos.gov.co/d/jxnq-r3i9', 'Caudales diarios IDEAM')}</div></div>
+  <div class="source-row"><h3>Elevación</h3><div><p>FABDEM V1-2 (Copernicus WorldDEM-30 © DLR e.V., sin bosques ni edificios), ${fmt(prof.stations)} estaciones del lecho, mosaicos verificados contra el CRC32 del archivo oficial de la Universidad de Bristol. <b>Licencia CC BY-NC-SA 4.0: uso no comercial.</b> El relieve 3D usa Copernicus GLO-30 (Mapterhorn) solo como visualización.</p>${link('https://data.bris.ac.uk/data/dataset/s5hqmjcdj8yo2ibzi9b4ew3sn', 'FABDEM')}</div></div>
+  <div class="source-row"><h3>Restricciones</h3><div><p>RUNAP (Parques Nacionales), páramos y reservas Ley 2ª (MinAmbiente), resguardos, consejos comunitarios y zonas de reserva campesina (Agencia Nacional de Tierras, 2026), embalses (IGAC 1:100.000 y © colaboradores de OpenStreetMap, ODbL). Amenaza por movimientos en masa: servicio en vivo del SGC (no se redistribuye). Faltan: zonificación de la Ley 2ª y sustracciones, POMCA, rondas hídricas, zonas de utilidad pública, títulos mineros, concesiones existentes y decisiones judiciales.</p>${link('https://runap.parquesnacionales.gov.co/', 'RUNAP')} · ${link('https://data-agenciadetierras.opendata.arcgis.com/', 'Datos abiertos ANT')}</div></div>
+  <div class="source-row"><h3>Red eléctrica y mercado</h3><div><p>Subestaciones de distribución UPME (1.557, con capacidad y carga) y de transmisión UPME; líneas de transmisión; proyectos con capacidad de transporte asignada; centrales XM/UPME (incompleto frente a las ~129 PCH en operación). El trazado de las redes de 13,2 y 34,5 kV no es público. Costos de conexión y de inversión indicativos, a calibrar.</p>${link('https://geo.upme.gov.co/server/rest/services/SUBESTACIONES', 'Subestaciones UPME')} · ${link('https://paratec.xm.com.co/', 'XM–PARATEC')}</div></div>
+  <div class="method-box"><h3>Límites que el revisor debe tener presentes</h3><p>• El rendimiento hídrico es un promedio por subzona: no distingue la cabecera del valle.<br>• El salto viene de un modelo global (error de pocos metros); saltos menores de ~20 m o concentrados en un punto son inciertos (se marcan).<br>• FABDEM refleja el terreno de 2011–2015: los embalses posteriores se marcan con la capa de embalses, pero otras obras recientes pueden faltar.<br>• La conducción se mide en línea recta; cuando cruza terreno alto se marca como túnel probable.<br>• No se evalúan geotecnia detallada, accesos, sedimentos ni concesiones existentes.<br>• Las coincidencias del corredor son alertas para revisar, no conceptos jurídicos.</p></div>`;
 }
-
 /* ───────────── Interfaz ───────────── */
 function bindUI() {
   for (const el of $$('[data-map-symbol]')) el.innerHTML = symbolSVG(el.dataset.mapSymbol);
@@ -782,7 +1016,7 @@ function bindUI() {
   $('#view-2d').onclick = () => setDimension(false); $('#view-3d').onclick = () => setDimension(true);
   $('#hint-close').onclick = () => $('#map-hint').hidden = true; $('#detail-close').onclick = closeDetail;
   $$('.detail-tabs button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; renderDetail(); });
-  for (const id of ['sources-open', 'method-open']) $('#' + id).onclick = () => { renderSources(); $('#sources-dialog').showModal(); };
+  for (const id of ['sources-open', 'method-open', 'method-open-2']) $('#' + id).onclick = () => { renderSources(); $('#sources-dialog').showModal(); };
   $('#sources-close').onclick = () => $('#sources-dialog').close();
   $('#save-site').onclick = saveSite; $('#export-site').onclick = exportSite;
   $('#mobile-sidebar').onclick = () => $('#sidebar').classList.toggle('mobile-open');
@@ -793,13 +1027,33 @@ function bindUI() {
     if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); $('#search').focus(); }
     if (e.key === 'Escape') { $('#search-results').hidden = true; $('#sidebar').classList.remove('mobile-open'); }
   });
-  $('#detail-content').addEventListener('input', e => {
-    if (!e.target.closest('.scenario-form') || e.target.closest('.params-form')) return;
-    const o = S.selection?.option; if (!o) return;
-    const q = $('#sc-q').value === '' ? NaN : Number($('#sc-q').value);
-    $('#scenario-result').innerHTML = scenarioText(q, Number($('#sc-eta').value) / 100, Number($('#sc-loss').value) / 100, Number($('#sc-cf').value) / 100, o.head);
-  });
+  // Escenario (prediseño y energía) y supuestos económicos editables
+  const onScenario = e => {
+    const sel = S.selection; if (!sel?.option) return;
+    const id = e.target.id;
+    if (id === 'sc-q') S.scenario.q = e.target.value === '' ? undefined : Number(e.target.value);
+    else if (id === 'sc-amb') { S.scenario.amb = e.target.value; $('#sc-ambv').disabled = e.target.value !== 'libre'; }
+    else if (id === 'sc-ambv') S.scenario.ambValue = e.target.value === '' ? undefined : Number(e.target.value);
+    else if (id === 'sc-eta') S.scenario.eta = e.target.value === '' ? undefined : Number(e.target.value);
+    else if (id.startsWith('ec-')) {
+      const v = Number(e.target.value); if (!isNum(v)) return;
+      if (id === 'ec-price') S.econ.priceCOPkWh = v; else if (id === 'ec-trm') S.econ.trm = v;
+      else if (id === 'ec-rate') S.econ.rate = v / 100; else if (id === 'ec-years') S.econ.years = v;
+      const keep = e.target.id; renderDetail(); const el = $('#' + keep); if (el) { el.focus(); }
+      return;
+    } else return;
+    if ($('#scenario-result')) $('#scenario-result').innerHTML = scenarioHTML(computeScenario(sel));
+  };
+  $('#detail-content').addEventListener('change', onScenario);
+  $('#detail-content').addEventListener('input', e => { if (e.target.matches('#sc-q, #sc-ambv, #sc-eta')) onScenario(e); });
   $('#detail-content').addEventListener('click', async e => {
+    const t = e.target.closest('[data-term]');
+    if (t) { openGlossary(t.dataset.term); return; }
+    if (e.target.closest('#restore-option')) {
+      const sel = S.selection; if (!sel?.originalSel) return;
+      setSelection(sel.originalSel);
+      return;
+    }
     if (!e.target.closest('#research')) return;
     const sel = S.selection; if (!sel?.reach) return;
     S.params = {...S.params, maxConduit: +$('#pa-conduit').value || DEFAULTS.maxConduit, minHead: +$('#pa-head').value || DEFAULTS.minHead,
@@ -807,12 +1061,47 @@ function bindUI() {
     e.target.closest('#research').disabled = true; e.target.closest('#research').textContent = 'Recorriendo el río…';
     const option = await searchBest(sel.reach, S.params);
     if (S.selection !== sel) return;
-    const next = {...sel, kind: 'reach', id: 'reach-' + sel.reach.id, option, site: undefined, context: undefined};
-    setSelection(next);
+    // Se conserva el sitio y su contexto para poder volver al esquema original
+    setSelection({...sel, kind: 'reach', id: 'reach-' + sel.reach.id, site: undefined, context: undefined, option, originalOption: option, originalSel: sel.originalSel || sel});
     if (!option) toast('Con esos criterios no hay un esquema desde este tramo.');
   });
+  $('#detail-content').addEventListener('keydown', e => { const t = e.target.closest('[data-term]'); if (t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openGlossary(t.dataset.term); } });
+  // Filtros nuevos y exportación
+  $('#dept-filter').onchange = e => { S.dept = e.target.value; applyFilters(); };
+  $('#grid-filter').onchange = e => { S.maxGrid = e.target.value; applyFilters(); };
+  $('#hide-regulated').onchange = e => { S.hideRegulated = e.target.checked; applyFilters(); };
+  $('#hide-quality').onchange = e => { S.hideQuality = e.target.checked; applyFilters(); };
+  $('#export-csv').onclick = exportCSV;
+  $('#print-site').onclick = printSite;
+  for (const id of ['glossary-open', 'glossary-open-2']) $('#' + id)?.addEventListener('click', () => openGlossary());
+  $('#glossary-close').onclick = () => $('#glossary-dialog').close();
+  // Pestañas de la ficha: vuelven arriba y responden a las flechas (accesibilidad)
+  $$('.detail-tabs button').forEach(b => b.onclick = () => { S.tab = b.dataset.tab; renderDetail(); $('.detail-scroll').scrollTop = 0; });
+  $('.detail-tabs').addEventListener('keydown', e => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+    const tabs = $$('.detail-tabs button'), i = tabs.findIndex(b => b.dataset.tab === S.tab);
+    const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
+    next.click(); next.focus();
+  });
 }
-function setDimension(use3D) {
+function openGlossary(termKey) {
+  $('#glossary-content').innerHTML = `<dl class="glossary">${Object.entries(GLOSSARY).map(([k, v]) => `<dt id="g-${esc(k.replace(/\W+/g, '-'))}" class="${k === termKey ? 'hit' : ''}">${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+  $('#glossary-dialog').showModal();
+  if (termKey) $(`#g-${termKey.replace(/\W+/g, '-')}`)?.scrollIntoView({block: 'center'});
+}
+/** Ficha imprimible: arma todas las pestañas en una sola página y abre el diálogo de impresión (PDF). */
+function printSite() {
+  const sel = S.selection; if (!sel) return;
+  const tabs = ['site', 'reach'].includes(sel.kind) ? ['summary', 'hydrology', 'context', 'business', 'steps'] : [null];
+  const prev = S.tab;
+  const parts = tabs.map(t => { if (t) S.tab = t; const html = !t ? featureHTML(sel) : t === 'hydrology' ? hydrologyHTML(sel) : t === 'context' ? contextHTML(sel) : t === 'business' ? businessHTML(sel) : t === 'steps' ? stepsHTML(sel) : summaryHTML(sel);
+    return `<section class="print-section">${t ? `<h2>${esc(TABS[t])}</h2>` : ''}${html}</section>`; });
+  S.tab = prev;
+  $('#print-area').innerHTML = `<header><b>Atlas PCH Colombia · ficha preliminar</b><span>${new Date().toLocaleDateString('es-CO')}</span></header>
+    <h1>${esc(sel.title)}</h1><p>${esc(sel.subtitle || '')}</p>${parts.join('')}
+    <footer>Exploración preliminar: no es diseño, concesión ni licencia. ${esc(location.href)}</footer>`;
+  window.print();
+}function setDimension(use3D) {
   if (!map) return;
   if (use3D) { $('#layer-relief').checked = true; map.setTerrain({source: 'terrain-dem', exaggeration: 1}); map.easeTo({pitch: 58, bearing: -15, zoom: Math.max(map.getZoom(), 7.3), duration: 750}); }
   else { map.setTerrain(null); map.easeTo({pitch: 0, bearing: 0, duration: 500}); }
@@ -847,11 +1136,14 @@ async function main() {
       map.fitBounds([[-79.1, -4.3], [-66.85, 12.5]], {padding: {top: 65, bottom: 55, left: 30, right: 45}, duration: 0});
       const sites = await sitesPromise;
       S.sites = sites.features; S.siteById = new Map(S.sites.map(f => [f.properties.id, f]));
+      const depts = [...new Set(S.sites.map(f => f.properties.d).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+      $('#dept-filter').insertAdjacentHTML('beforeend', depts.map(d => `<option>${esc(d)}</option>`).join(''));
       applyFilters();
       $('#map-loading').hidden = true; document.body.dataset.atlasReady = 'true'; window.dispatchEvent(new Event('atlas-ready'));
       $('#data-status').textContent = `${fmt(S.sites.length)} sitios · 605.905 tramos`;
       void attachBasemap(map, 'relief');
       S.manifest = await manifestPromise; S.subzonas = await subzonaPromise; renderSources();
+      json(V + 'validation.json').then(v => { S.validation = v; renderSources(); }).catch(() => {});
       for (const [key, file, source] of [['plants', 'data/plants.geojson', 'plants'], ['municipalPlants', 'data/plants-municipal-references.geojson', 'municipal-plants'],
         ['boundary', 'data/colombia-boundary.geojson', 'boundary'], ['departments', 'data/colombia-departments.geojson', 'departments']])
         void ensureLayerData(key, file, source);

@@ -60,3 +60,90 @@
 .legend-ring{display:inline-block;width:11px;height:11px;border-radius:50%;border:2px solid #7d6a3a;background:#fff;margin:0 5px 0 4px}
 .params-form{margin-top:10px}
 #detail-content .primary-button:disabled{opacity:.6}
+
+/* ── Versión 2.1 · revisión del panel (diseño, accesibilidad, usuario final) ── */
+/* Grises de texto con contraste AA: --text-2 6,5:1 y --text-3 5,4:1 sobre el fondo */
+:root{--text-2:#4f6157;--text-3:#5d6e64;--focus:#1f6f5c;--border-2:#859790}
+/* Escala tipográfica con mínimo de 11 px (antes había 57 tamaños entre 7 y 10 px) */
+.eyebrow,.detail-heading .eyebrow,.mini-tag,.source-badge,.legend-title{font-size:11px;letter-spacing:.08em;color:var(--text-3)}
+.sidebar-intro p,.layer-row small,.section-note,.text-button,.sidebar-footer,.sidebar-footer>.text-button,.layer-row.compact label,
+.opportunity-item .op-area,.list-header>span,.viewport-label,.select-label,.map-coordinate,.map-breadcrumb,.map-breadcrumb>span:first-child,
+.detail-pill,.detail-note,.detail-note a,.context-item p,.context-item a,.counter-line,.error-text,.route-endpoints,.scenario-form label,
+.search-result small,.map-hint div>span,.maplibregl-ctrl-attrib,.maplibregl-ctrl-scale,.maplibregl-popup-content small,.power-chip,
+.map-view-buttons button,.segmented button,.nav-button span{font-size:12px}
+.layer-row b,.opportunity-item .op-name,.opportunity-item .op-power,.detail-tabs button,.detail-kv,.detail-section-title,.search-result b,
+.section-title h2,.map-hint b,select,.search-wrap input,.scenario-form input,.scenario-form select,.list-header,.metric-label,.context-item b{font-size:13px}
+.layer-group{font-size:11px}
+.sidebar-intro p,.layer-row small,.section-note,.opportunity-item .op-area,.detail-note,.context-item p,.detail-kv dt,.metric-label,
+.select-label,.viewport-label,.scenario-form label,.counter-line,.route-endpoints,.map-coordinate,.search-result small{color:var(--text-2)}
+.layer-row.compact label,.text-button,.sidebar-footer,.list-header>span{color:var(--text-3)}
+.search-wrap input::placeholder{color:#6b7a70}
+.source-badge{color:#2e6b4f}
+.detail-pill,.detail-pill.review{color:#7a5a14}
+/* Controles y foco visibles (WCAG 1.4.11 y 2.4.7) */
+.switch{width:36px;height:20px;background:#7f8f86}.switch:before{width:14px;height:14px}.switch:checked{background:#1f6f5c}.switch:checked:before{transform:translateX(16px)}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,.term:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.nav-button:focus-visible{outline-offset:-4px}
+.search-wrap,select,.scenario-form input,.scenario-form select{border-color:var(--border-2)}
+/* Intro de la barra lateral más compacta e informativa */
+.sidebar-intro h1{font-size:19px;line-height:1.25;letter-spacing:-.3px}
+.sidebar-intro p{line-height:1.55}
+.text-button.inline{padding:0;font-size:12px;color:var(--focus);text-decoration:underline}
+.filter-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.filter-grid .select-label{margin:12px 0 0}.select-label select{margin-top:5px}
+/* Lista */
+.op-warn{display:block;font-size:12px;color:#8a4b0f;margin-top:3px}
+.opportunity-item.over .op-name,.opportunity-item.over .op-power{color:var(--text-3)}
+.list-header{gap:8px}.list-header #export-csv{margin-left:auto;font-weight:600}
+/* Ficha */
+.power-readout.over strong{color:#5d6e64}
+.detail-pill b{display:inline}.detail-pill{font-size:12px;line-height:1.55}
+.term{border-bottom:1px dotted currentColor;cursor:help}.term i{font-style:normal;font-size:10px;display:inline-grid;place-items:center;width:14px;height:14px;border-radius:50%;background:#e3ece0;color:#2e5b47;margin-left:4px;vertical-align:1px}
+.scenario-form select{width:100%;padding:7px 8px;border:1px solid var(--border-2);border-radius:5px;margin-top:4px;background:#fff;color:#2c4a36}
+.scenario-form input:disabled{background:#f1f4ef;color:#9aa69d}
+.scenario-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:4px 0 12px}
+.scenario-grid>div{background:#fff;border:1px solid #dfe8d8;border-radius:7px;padding:9px 10px}
+.scenario-grid span{display:block;font-size:12px;color:var(--text-2)}.scenario-grid strong{display:block;font-size:17px;font-weight:600;color:#1f4a3c;margin-top:3px}
+.scenario-grid small{display:block;font-size:11px;color:var(--text-3);margin-top:2px}
+.scenario-result{background:#f4f8f0}
+.plain-list{margin:6px 0 0;padding-left:18px;font-size:12px;line-height:1.6;color:var(--text-2)}
+.steps-list{margin:12px 0;padding-left:20px}.steps-list li{margin-bottom:12px;font-size:13px}.steps-list p{font-size:12px;color:var(--text-2);line-height:1.55;margin-top:3px}
+.steps-list small{display:inline-block;margin-top:4px;font-size:11px;color:#2e6b4f;background:#e9f0df;border-radius:4px;padding:2px 6px}
+.detail-tabs{gap:16px;overflow-x:auto;scrollbar-width:none}.detail-tabs button{white-space:nowrap}
+.detail-footer #print-site{flex:0 0 auto;margin-right:10px;padding:10px 12px}
+/* Perfil del lecho: la regla global svg{stroke} empastaba las cifras */
+.profile{height:175px}.profile text{stroke:none;font-size:10px;fill:#5d6e64}.profile .profile-label{fill:#7a5214;font-weight:600}
+.profile .profile-axis-title{font-size:10px;fill:#5d6e64}.profile .profile-grid{stroke:#e7ede2;stroke-width:1}
+.profile .profile-intake{fill:#0f5e4f}.profile .profile-powerhouse{fill:#7a2e0e;stroke:#fff;stroke-width:1.2}
+.route-endpoints i{background:#0f5e4f}.route-endpoints>span:last-child i{background:#7a2e0e;border-radius:1px}
+/* Paleta de potencia apta para daltonismo (mismos valores que map-symbols.mjs) */
+.dot.micro{background:#4a88c2}.dot.mini{background:#1f4f8f}.dot.small{background:#bd7410}.dot.medium{background:#a3470d}.dot.large{background:#6e1a3c}
+.legend-dot.intake{background:#0f5e4f}.legend-dot.powerhouse{background:#7a2e0e;border-radius:2px}
+.map-key-body .legend-line.route{background:#e08a1e;box-shadow:0 0 0 1px #5a3a0a}
+/* Glosario */
+.glossary dt{font-weight:650;font-size:13px;margin-top:12px}.glossary dd{margin:3px 0 0;font-size:13px;color:var(--text-2);line-height:1.6}
+.glossary dt.hit{color:#1f6f5c}.glossary dt.hit+dd{background:#eef4e4;border-radius:5px;padding:4px 6px}
+/* Móvil: el panel de capas queda encima de la simbología y de los botones (revisión de diseño y usuario) */
+@media(max-width:660px){
+ .sidebar{z-index:20}
+ body:has(.sidebar.mobile-open) .map-bottom,body:has(.sidebar.mobile-open) .mobile-sidebar{display:none}
+ .maplibregl-ctrl-bottom-left{bottom:56px}
+ .detail-panel{z-index:21}
+ .filter-grid{grid-template-columns:1fr}
+}
+@media(max-width:1150px){.sidebar-intro h1{font-size:17px}}
+/* Impresión: ficha completa en una página (PDF) */
+#print-area{display:none}
+@media print{
+ body{overflow:visible;background:#fff}
+ body>*:not(#print-area){display:none!important}
+ #print-area{display:block;padding:0 6mm;color:#111;font-size:11pt}
+ #print-area header{display:flex;justify-content:space-between;border-bottom:1px solid #999;padding-bottom:4mm;margin-bottom:4mm;font-size:10pt}
+ #print-area h1{font-size:18pt;margin:0}#print-area h2{font-size:13pt;margin:6mm 0 2mm;border-bottom:1px solid #ccc;padding-bottom:1mm}
+ #print-area .print-section{break-inside:auto}
+ #print-area button,#print-area input,#print-area select,#print-area .scenario-form,#print-area .params-form,#print-area .wide-button{display:none!important}
+ #print-area .detail-pill{border:1px solid #bbb;background:#f7f7f7;color:#222}
+ #print-area .detail-kv{grid-template-columns:1fr auto}#print-area .detail-kv dd{max-width:none}
+ #print-area .term i{display:none}#print-area .term{border:0}
+ #print-area footer{margin-top:8mm;border-top:1px solid #999;padding-top:3mm;font-size:9pt;color:#444}
+}
+@media(max-width:660px){#glossary-open-2{display:none}}

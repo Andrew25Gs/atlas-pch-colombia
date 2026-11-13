@@ -7,7 +7,7 @@
  <meta name="robots" content="noindex, nofollow">
  <title>Atlas PCH · Colombia</title>
  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
- <link rel="stylesheet" href="vendor/maplibre-gl.css"><link rel="stylesheet" href="app.css?v=2.0.6">
+ <link rel="stylesheet" href="vendor/maplibre-gl.css"><link rel="stylesheet" href="app.css?v=2.1.0">
 </head>
 <body>
  <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -38,11 +38,11 @@
    <button class="nav-button" data-view="sites">Sitios candidatos</button>
    <button class="nav-button" data-view="saved">Guardados <span id="saved-count">0</span></button>
   </nav>
-  <div class="header-end"><span class="national-label"><span></span> Versión de revisión · datos 2026</span><button class="icon-button" id="sources-open" aria-label="Fuentes y metodología"><svg><use href="#i-book"/></svg></button></div>
+  <div class="header-end"><span class="national-label"><span></span> Versión de revisión · datos 2026</span><button class="icon-button" id="glossary-open-2" aria-label="Glosario" title="Glosario"><svg><use href="#i-info"/></svg></button><button class="icon-button" id="sources-open" aria-label="Fuentes y metodología"><svg><use href="#i-book"/></svg></button></div>
  </header>
  <div class="workspace">
   <aside class="sidebar" id="sidebar">
-   <div class="sidebar-intro"><button class="icon-button sidebar-mobile-close" id="sidebar-close" aria-label="Cerrar capas y filtros"><svg><use href="#i-close"/></svg></button><div class="eyebrow">EXPLORACIÓN HIDROENERGÉTICA</div><h1>El potencial<br>de nuestro territorio.</h1><p>Caudal, salto y restricciones<br>de cada río de Colombia.</p></div>
+   <div class="sidebar-intro"><button class="icon-button sidebar-mobile-close" id="sidebar-close" aria-label="Cerrar capas y filtros"><svg><use href="#i-close"/></svg></button><div class="eyebrow">EXPLORACIÓN PRELIMINAR</div><h1>Sitios para pequeñas centrales hidroeléctricas</h1><p>Una <b>PCH</b> es una central de hasta 20 MW que desvía parte de un río y devuelve el agua más abajo. Este atlas estima, para cada río de Colombia, caudal, salto, potencia, restricciones y conexión. <button class="text-button inline" id="glossary-open">Glosario</button> · <button class="text-button inline" id="method-open-2">Cómo se calcula</button></p></div>
    <div class="search-wrap"><svg><use href="#i-search"/></svg><input id="search" type="search" autocomplete="off" aria-label="Buscar río, municipio o central" placeholder="Río, municipio o central…"><kbd>/</kbd><div id="search-results" class="search-results" hidden></div></div>
    <div class="sidebar-scroll">
     <section class="layer-section"><div class="section-title"><h2><svg><use href="#i-layers"/></svg> Capas del mapa</h2><button id="layers-reset" class="text-button">Restablecer</button></div>
@@ -66,16 +66,19 @@
     </section>
     <section class="potential-section"><div class="section-title"><h2><svg><use href="#i-filter"/></svg> Sitios candidatos</h2><input id="layer-sites" class="switch" aria-label="Mostrar sitios candidatos" type="checkbox" checked></div>
      <p class="section-note" id="sites-note">Cálculo nacional: caudal ENA 2022 × salto FABDEM, sin solapes.</p>
-     <div class="power-filters" id="power-filters" aria-label="Filtrar por potencia"><button data-power="all" class="power-chip active" aria-pressed="true">Todos</button></div>
+     <div class="power-filters" id="power-filters" aria-label="Filtrar por potencia"><button data-power="pch" class="power-chip active" aria-pressed="true">Todas las PCH (≤ 20 MW)</button></div>
      <label class="select-label" for="constraint-filter">Restricciones en el corredor</label>
      <select id="constraint-filter">
-      <option value="no-spnn">Excluir Parques Nacionales y embalses existentes</option>
+      <option value="no-spnn">Sin Parques Nacionales ni embalses</option>
       <option value="all">Mostrar todos</option>
-      <option value="no-ethnic">Excluir además territorios étnicos</option>
-      <option value="clean">Solo sin coincidencias</option>
+      <option value="no-ethnic">Sin Parques, embalses ni territorios étnicos</option>
+      <option value="clean">Sin ninguna coincidencia</option>
      </select>
-     <label class="select-label" for="area-filter">Área hidrográfica</label><select id="area-filter"><option value="">Todas las áreas</option><option>Magdalena-Cauca</option><option>Caribe</option><option>Pacífico</option><option>Orinoco</option><option>Amazonas</option></select>
-     <div class="list-header"><b id="results-title">Sitios por potencia</b><span id="result-count">—</span></div>
+     <div class="filter-grid"><label class="select-label" for="area-filter">Área hidrográfica<select id="area-filter"><option value="">Todas</option><option>Magdalena-Cauca</option><option>Caribe</option><option>Pacífico</option><option>Orinoco</option><option>Amazonas</option></select></label><label class="select-label" for="dept-filter">Departamento<select id="dept-filter"><option value="">Todos</option></select></label></div>
+     <label class="select-label" for="grid-filter">Distancia a una subestación útil<select id="grid-filter"><option value="">Cualquiera</option><option value="10">Hasta 10 km</option><option value="20">Hasta 20 km</option><option value="40">Hasta 40 km</option></select></label>
+     <label class="viewport-label"><input id="hide-regulated" type="checkbox" checked>Ocultar caudal regulado por embalses</label>
+     <label class="viewport-label"><input id="hide-quality" type="checkbox">Ocultar saltos dudosos (escalón o pendiente atípica)</label>
+     <div class="list-header"><b id="results-title">Sitios por potencia</b><span id="result-count">—</span><button class="text-button" id="export-csv" title="Descargar la lista filtrada en CSV (Excel)">CSV ↓</button></div>
      <label class="viewport-label"><input id="viewport-only" type="checkbox">Solo en el área visible</label>
      <div id="site-list" class="opportunity-list"><div class="loading-text">Cargando sitios candidatos…</div></div>
     </section>
@@ -95,14 +98,16 @@
   <aside id="detail-panel" class="detail-panel" hidden aria-label="Ficha del lugar seleccionado">
    <div class="detail-heading"><span class="eyebrow" id="detail-eyebrow">FICHA DEL TERRITORIO</span><button id="detail-close" class="icon-button" aria-label="Cerrar ficha"><svg><use href="#i-close"/></svg></button></div>
    <div id="detail-title"></div>
-   <div class="detail-tabs" role="tablist" aria-label="Información del lugar"><button role="tab" aria-selected="true" data-tab="summary">Resumen</button><button role="tab" aria-selected="false" data-tab="hydrology">Hidrología</button><button role="tab" aria-selected="false" data-tab="context">Entorno</button></div>
-   <div class="detail-scroll"><div id="mini-map" aria-label="Mapa de detalle del lugar"></div><div id="detail-content"></div></div>
-   <div class="detail-footer"><button class="secondary-button" id="save-site"><svg><use href="#i-save"/></svg> Guardar lugar</button><button class="icon-button" id="export-site" aria-label="Descargar ficha GeoJSON"><svg><use href="#i-download"/></svg></button></div>
+   <div class="detail-tabs" role="tablist" aria-label="Información del lugar"><button role="tab" aria-selected="true" aria-controls="detail-content" data-tab="summary">Resumen</button><button role="tab" aria-selected="false" aria-controls="detail-content" data-tab="hydrology">Hidrología</button><button role="tab" aria-selected="false" aria-controls="detail-content" data-tab="context">Entorno</button><button role="tab" aria-selected="false" aria-controls="detail-content" data-tab="business">Negocio</button><button role="tab" aria-selected="false" aria-controls="detail-content" data-tab="steps">Pasos</button></div>
+   <div class="detail-scroll"><div id="mini-map" aria-label="Mapa de detalle del lugar"></div><div id="detail-content" role="tabpanel"></div></div>
+   <div class="detail-footer"><button class="secondary-button" id="save-site"><svg><use href="#i-save"/></svg> Guardar lugar</button><button class="secondary-button" id="print-site" title="Imprimir o guardar la ficha como PDF">PDF</button><button class="icon-button" id="export-site" aria-label="Descargar esquema en GeoJSON (para SIG)" title="Descargar esquema en GeoJSON (para SIG)"><svg><use href="#i-download"/></svg></button></div>
   </aside>
  </div>
  <dialog id="sources-dialog"><div class="dialog-header"><div><span class="eyebrow">TRANSPARENCIA DE LOS DATOS</span><h2>Fuentes y metodología</h2></div><button class="icon-button" id="sources-close" aria-label="Cerrar fuentes"><svg><use href="#i-close"/></svg></button></div><div id="sources-content" class="sources-content"></div></dialog>
+ <dialog id="glossary-dialog"><div class="dialog-header"><div><span class="eyebrow">AYUDA</span><h2>Glosario</h2></div><button class="icon-button" id="glossary-close" aria-label="Cerrar glosario"><svg><use href="#i-close"/></svg></button></div><div id="glossary-content" class="sources-content"></div></dialog>
+ <div id="print-area" aria-hidden="true"></div>
  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
  <noscript>Este atlas necesita JavaScript para mostrar el mapa interactivo.</noscript>
  <script defer src="vendor/pmtiles.js?v=4.5.0"></script>
- <script defer src="boot.js?v=2.0.6"></script>
+ <script defer src="boot.js?v=2.1.0"></script>
 </body></html>
